@@ -1,0 +1,102 @@
+version: "3.8"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    restart: unless-stopped
+    command: redis-server
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  algorithm-service:
+    build: .
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      - PYTHONPATH=/app
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DEBUG=${DEBUG:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_DIR=/app/logs
+      - LOG_JSON=${LOG_JSON:-false}
+    volumes:
+      - ./app:/app/app
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: ${HEALTH_CHECK_INTERVAL:-30}s
+      timeout: ${HEALTH_CHECK_TIMEOUT:-10}s
+      retries: 3
+      start_period: 40s
+
+  algorithm-worker:
+    build: .
+    command: python workers/start_algorithm_worker.py
+    environment:
+      - PYTHONPATH=/app
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - ALGORITHM_WORKER_TIMEOUT=${ALGORITHM_WORKER_TIMEOUT:-300}
+      - ALGORITHM_WORKER_MAX_RETRIES=${ALGORITHM_WORKER_MAX_RETRIES:-3}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_DIR=/app/logs
+      - LOG_JSON=${LOG_JSON:-false}
+    volumes:
+      - ./app:/app/app
+      - ./workers:/app/workers
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  result-worker:
+    build: .
+    command: python workers/start_result_worker.py
+    environment:
+      - PYTHONPATH=/app
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - RESULT_WORKER_TIMEOUT=${RESULT_WORKER_TIMEOUT:-300}
+      - RESULT_WORKER_MAX_RETRIES=${RESULT_WORKER_MAX_RETRIES:-3}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_DIR=/app/logs
+      - LOG_JSON=${LOG_JSON:-false}
+    volumes:
+      - ./app:/app/app
+      - ./workers:/app/workers
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  rq-dashboard:
+    build: .
+    command: python dashboard/start_dashboard.py
+    ports:
+      - "${DASHBOARD_PORT:-9181}:9181"
+    environment:
+      - PYTHONPATH=/app
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - DASHBOARD_PORT=${DASHBOARD_PORT:-9181}
+      - DASHBOARD_USERNAME=${DASHBOARD_USERNAME:-}
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
+    volumes:
+      - ./dashboard:/app/dashboard
+    depends_on:
+      - redis
+    restart: unless-stopped
