@@ -19,7 +19,7 @@ def process_algorithm_task(task_data):
         stock_code = task_data['stock']
         
         # Симуляція роботи алгоритму
-        time.sleep(2)  
+        time.sleep(2)
 
         
         # Додаємо результат до другої черги

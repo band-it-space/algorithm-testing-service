@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 from datetime import datetime
 
 class AlgorithmRequest(BaseModel):
@@ -32,7 +32,6 @@ class AlgorithmResponse(BaseModel):
             }
         }
 
-# Моделі для черг
 class QueueTask(BaseModel):
     task_id: str
     algorithm_name: str
@@ -48,3 +47,13 @@ class WorkerResult(BaseModel):
     processing_time_ms: float
     worker_id: str
     completed_at: datetime
+
+class UnifiedTradeSignal(BaseModel):
+    buy_signal: datetime
+    stop_signal: Union[datetime, str]  
+    entry_price: float
+    exit_price: Union[float, str]  
+    day_before_buy: Optional[datetime] = None
+    day_before_sell: Optional[datetime] = None
+    gain_lose: Optional[float] = None  
+    source: str  

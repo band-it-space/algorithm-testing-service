@@ -14,6 +14,7 @@ services:
       retries: 3
 
   algorithm-service:
+    env_file: .env
     build: .
     ports:
       - "${API_PORT:-8000}:8000"
@@ -43,6 +44,7 @@ services:
   algorithm-worker:
     build: .
     command: python workers/start_algorithm_worker.py
+    env_file: .env
     environment:
       - PYTHONPATH=/app
       - REDIS_HOST=redis
@@ -64,6 +66,7 @@ services:
   result-worker:
     build: .
     command: python workers/start_result_worker.py
+    env_file: .env
     environment:
       - PYTHONPATH=/app
       - REDIS_HOST=redis
@@ -87,6 +90,7 @@ services:
     command: python dashboard/start_dashboard.py
     ports:
       - "${DASHBOARD_PORT:-9181}:9181"
+    env_file: .env
     environment:
       - PYTHONPATH=/app
       - REDIS_HOST=redis
