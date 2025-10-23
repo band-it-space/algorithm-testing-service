@@ -20,7 +20,7 @@ async def init_algo_testing():
                 "message": "No stocks found",
                 "status": "error",
             }
-        stocks = ["838"] #! remove this after testing
+        stocks = ["838", "2800"] #! remove this after testing
         for stock in stocks:
             task_id = QueueService.add_to_algorithm_queue(stock)
             if task_id is None:

@@ -2,11 +2,13 @@ import os
 from datetime import timedelta
 import logging
 from datetime import datetime
-from typing import List, Optional, TypedDict, Union
+from typing import List, Optional, TypedDict, Union, Tuple
 import requests
+
 from app.services.file_service import FileService
-from pydantic import ValidationError
 from app.models.algorithm_models import UnifiedTradeSignal
+from app.config.queue_config import file_write_queue
+from app.services.queue_service import QueueService
 
 class ErrorResponse(TypedDict):
     error: str
@@ -20,6 +22,7 @@ START_FROM = '2019'
 
 file_service = FileService()
 
+# helpers
 def _to_float_or_zero(value) -> float:
     try:
         if value in (None, "", "Open position"):
@@ -36,23 +39,9 @@ def _to_float_or_open(value) -> Union[float, str]:
     except Exception:
         return "Open position"
 
-def _is_weekend(date):
-    return date.weekday() >= 5 
+async def load_server_data(stock_code:str)-> Union[Tuple[List[UnifiedTradeSignal], List[Optional[datetime]]], ErrorResponse]:
+    """Завантажує дані з API, повертає підготовлений масив сигналів та масив торгових днів"""
 
-def _count_trading_days(start_date, end_date):
-    """Рахує кількість торгових днів між датами (виключаючи вихідні)"""
-    if start_date > end_date:
-        start_date, end_date = end_date, start_date
-    
-    trading_days = 0
-    current = start_date
-    while current <= end_date:
-        if not _is_weekend(current):
-            trading_days += 1
-        current += timedelta(days=1)
-    return trading_days
-
-async def load_server_data(stock_code:str)-> Union[List[UnifiedTradeSignal], ErrorResponse]:
     try:
         API_URL =f'http://ete.stockfisher.com.hk/v1.1/debugHKEX/verifyData?TradeDay=&Code={stock_code}&verifyType=signal'
         headers = {
@@ -68,14 +57,16 @@ async def load_server_data(stock_code:str)-> Union[List[UnifiedTradeSignal], Err
             return {"error": "Empty response", "detail": f"There is not any data in API for stock {stock_code}"
         }
         #TODO форуємо вихідний масив
+        trade_days = []
         response_data: List[UnifiedTradeSignal] = []
         current_position = None
         
         for  day in result_data: 
             trade_day = day.get("tradeday") or ""
+            trade_days.append(datetime.fromisoformat(trade_day.replace('Z', '+00:00')).replace(tzinfo=None) if trade_day else None)
             entry_date = day.get("entry_date") or ""
     
-        #TODO Не доаю хначення раніше 2019
+        #TODO Не доаю значення раніше 2019
             date_to_check = trade_day if trade_day else entry_date
             if date_to_check and date_to_check[:4] >= START_FROM:
                 pass
@@ -151,7 +142,7 @@ async def load_server_data(stock_code:str)-> Union[List[UnifiedTradeSignal], Err
             except Exception as e:
                 logger.error(f"Error building unified final position signal: {e}")
                 
-        return response_data
+        return response_data, trade_days
 
     except requests.HTTPError as e:
         logger.error(f"HTTP error for stock {stock_code}: {e}, status=    {response.status_code}")
@@ -159,7 +150,6 @@ async def load_server_data(stock_code:str)-> Union[List[UnifiedTradeSignal], Err
     except Exception as e:
         logger.error(f'Error while loading data from API, stock: {stock_code}, {e}')
         return { "error": "API error", "detail": "API error"}
-
 
 def convert_csv_to_unified(csv_row: dict) -> UnifiedTradeSignal:
     """Конвертує CSV рядок до UnifiedTradeSignal"""
@@ -219,78 +209,146 @@ async def process_result_task(processing_data):
         #TODO Отримую дані 
         stock_code = processing_data['stock_code']
 
-        api_data = await load_server_data(stock_code)
+        api_result = await load_server_data(stock_code)
 
-        file_data = await file_service.read_data_from_csv(stock_code)
+        new_algo_data = await file_service.read_data_from_csv(stock_code)
 
-        #TODO Підготовка та обробка даних
-        unified_api_data: List[UnifiedTradeSignal] = api_data if isinstance(api_data, list) else []
-        
-        unified_csv_data = []
-        for csv_row in file_data:
+        #TODO Підготовка 
+        if isinstance(api_result, dict):
+            logger.error(f"API error for stock {stock_code}: {api_result}")
+            unified_api_data: List[UnifiedTradeSignal] = []
+            trade_days: List[Optional[datetime]] = []
+        else:
+            unified_api_data, trade_days = api_result
+                
+        unified_algo_data = []
+        for csv_row in new_algo_data:
             try:
                 unified_signal = convert_csv_to_unified(csv_row)
-                unified_csv_data.append(unified_signal)
+                unified_algo_data.append(unified_signal)
             except Exception as e:
                 logger.error(f"Error converting CSV signal to unified: {e}")
-        
-        # logger.info(f"Unified API data: {len(unified_api_data)} signals")
-        # logger.info(f"Unified CSV data: {len(unified_csv_data)} signals")
-        
-        # if unified_api_data:
-        #     logger.info(f"Sample unified API signal: {unified_api_data}")
-        # if unified_csv_data:
-        #     logger.info(f"Sample unified CSV signal: {unified_csv_data}")
-        
+
+        #TODO Обробка даних
         match_count = 0
         deviations_signals = 0
+        unmatched_api_data = []
 
         for api_item in unified_api_data:
-            for csv_item in unified_csv_data:
-                # logger.info(f"api_item.buy_signal:{api_item.buy_signal}")
-                # logger.info(f"csv_item.buy_signal:{csv_item.buy_signal}")
-                # logger.info(f"api_item.stop_signal:{api_item.stop_signal}")
-                # logger.info(f"csv_item.stop_signal:{csv_item.stop_signal}")
+            found_match = False
+            i = 0
+            while i < len(unified_algo_data):
+                csv_item = unified_algo_data[i]
                 
                 if (api_item.buy_signal == csv_item.buy_signal and
                     api_item.stop_signal == csv_item.stop_signal):
                     match_count += 1
-                else:            
-                    if api_item.buy_signal and csv_item.buy_signal:
-                        trading_days_diff = _count_trading_days(api_item.buy_signal, csv_item.buy_signal)
-                    buy_match = trading_days_diff <= 2
 
-                    if api_item.stop_signal and csv_item.stop_signal and api_item.stop_signal != "Open position" and csv_item.stop_signal != "Open position":
-                        trading_days_diff = _count_trading_days(api_item.stop_signal, csv_item.stop_signal)
-                        stop_match = trading_days_diff <= 2
+                    unified_algo_data.pop(i)
+                    found_match = True
+                    break
+                
+                else:
+                    #buy_signal
+                    api_buy_index = None
+                    csv_buy_index = None
+                    
+                    if api_item.buy_signal:
+                        try:
+                            api_buy_index = trade_days.index(api_item.buy_signal)
+                        except ValueError:
+                            logger.info(f"API buy_signal {api_item.buy_signal} не знайдено в trade_days")
+                    
+                    if csv_item.buy_signal:
+                        try:
+                            csv_buy_index = trade_days.index(csv_item.buy_signal)
+                        except ValueError:
+                            logger.info(f"CSV buy_signal {csv_item.buy_signal} не знайдено в trade_days")
+                    
+                    if api_buy_index is not None and csv_buy_index is not None:
+                        index_diff = abs(api_buy_index - csv_buy_index)
+                        buy_match = index_diff <= 2
+                    else:
+                        buy_match = False
+                    
+                    #stop_signal
+                    api_stop_index = None
+                    csv_stop_index = None
+                    
+                    if (api_item.stop_signal and csv_item.stop_signal and 
+                        api_item.stop_signal != "Open position" and csv_item.stop_signal != "Open position"):
+                        try:
+                            if isinstance(api_item.stop_signal, datetime):
+                                api_stop_index = trade_days.index(api_item.stop_signal)
+                        except ValueError:
+                            logger.info(f"API stop_signal {api_item.stop_signal} не знайдено в trade_days")
+                        
+                        try:
+                            if isinstance(csv_item.stop_signal, datetime):
+                                csv_stop_index = trade_days.index(csv_item.stop_signal)
+                        except ValueError:
+                            logger.info(f"CSV stop_signal {csv_item.stop_signal} не знайдено в trade_days")
+                        
+                        if api_stop_index is not None and csv_stop_index is not None:
+                            index_diff = abs(api_stop_index - csv_stop_index)
 
-                    elif api_item.stop_signal == csv_item.stop_signal:  # Обидва "Open position"
+                            stop_match = index_diff <= 2
+                        else:
+                            stop_match = False
+
+                    elif api_item.stop_signal == csv_item.stop_signal:
                         stop_match = True
-            
+                    else:
+                        stop_match = False
+                
                     if buy_match and stop_match:
                         deviations_signals += 1
 
+                        unified_algo_data.pop(i)
+                        found_match = True
+                        break
+                    else:
+                        i += 1
+            
+            if not found_match:
+                unmatched_api_data.append(api_item)  
+
+        
         logger.info("------------------------------" )
         logger.info(f"Stock: {stock_code}")
         logger.info(f"Total API signals: {len(unified_api_data)}")
-        logger.info(f"Total CSV signals: {len(unified_csv_data)}")
+        logger.info(f"Total CSV signals: {len(new_algo_data)}")
         logger.info(f"Total exact matches: {match_count}" )
         logger.info(f"Deviations matches (±2 trading days): {deviations_signals}")
-        logger.info("------------------------------" )
+        logger.info(f"Unmatched CSV signals: {len(unified_algo_data)}")
+        logger.info(f"Unmatched CSV values: {unified_algo_data}")
+        logger.info(f"Unmatched API signals: {len(unmatched_api_data)}")
+        logger.info(f"Unmatched API values: {unmatched_api_data}")
+   
+        # TODO Зберігаємо в черзі для безпечного додавання в файл
+        results_data = [{
+            'stock_code': stock_code,
+            'timestamp': datetime.now().isoformat(),
+            'total_api': f'{len(unified_api_data)}',
+            'total_algo': f'{len(new_algo_data)}',
+            'total_exact': f'{match_count}',
+            'with_deviation': f'{deviations_signals}',
+            'unmatched_api': f'{len(unmatched_api_data)}',
+            'unmatched_algo': f'{len(unified_algo_data)}',
+        }]
         
+        field_names = ['stock_code', 'timestamp', 'total_api','total_algo', 'total_exact', 'with_deviation', 'unmatched_api', 'unmatched_algo' ]
+        
+        # Додаємо результат до третьої черги
+        QueueService.add_to_file_write_queue(stock_code, results_data, field_names)
+        logger.info(f"File write task queued for stock: {stock_code}")
+        logger.info(f"Processing for {stock_code} compited")
 
-        # Фінальний результат (ви заміните на свою логіку)
-        final_result = {
+        return {
+            "final_result": {
             "stock_code": stock_code,
             "final_result": "Final result",
-        }
-        
-        logger.info(f"Processing for {stock_code} compited")
-        
-
-        
-        return {
-            "final_result": final_result,
+        },
         }
         
     except Exception as e:

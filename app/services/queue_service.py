@@ -50,6 +50,31 @@ class QueueService:
         return task_id
     
     @staticmethod
+    def add_to_file_write_queue(stock_code: str, results_data, field_names) -> str:
+        """
+        Додає результат до другої черги (file_write)
+        """
+        task_id = str(uuid.uuid4())
+        
+        processing_data = {
+            "task_id": task_id,
+            "stock_code": stock_code,
+            "results_data": results_data,
+            "field_names": field_names,
+        }
+        
+        # Додаємо завдання до черги обробки результатів
+        job = result_processing_queue.enqueue(
+            'app.workers.file_write_worker.process_file_write_task',
+            processing_data,
+            job_id=task_id
+        )
+        
+        return task_id
+    
+    
+
+    @staticmethod
     def get_queue_status():
         """
         Повертає статус черг

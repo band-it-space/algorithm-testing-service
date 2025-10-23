@@ -23,3 +23,5 @@ else:
 algorithm_calculation_queue = Queue('algorithm_calculation', connection=redis_conn)
 
 result_processing_queue = Queue('result_processing', connection=redis_conn)
+
+file_write_queue = Queue('file_write', connection=redis_conn)
