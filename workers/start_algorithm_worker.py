@@ -21,7 +21,7 @@ def main():
     logger.info("Starting Algorithm Worker...")
     logger.info(f"Redis connection: {redis_conn}")
     logger.info("Queue: algorithm_calculation")
-    
+
     with Connection(redis_conn):
         worker = Worker([algorithm_calculation_queue])
         logger.info("Algorithm worker started. Press Ctrl+C to stop.")

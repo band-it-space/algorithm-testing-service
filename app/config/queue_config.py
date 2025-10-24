@@ -20,7 +20,9 @@ else:
     redis_conn = Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
 
 # Queue configuration
-algorithm_calculation_queue = Queue('algorithm_calculation', connection=redis_conn)
+ALGORITHM_WORKER_TIMEOUT = int(os.getenv('ALGORITHM_WORKER_TIMEOUT', 1000))
+
+algorithm_calculation_queue = Queue('algorithm_calculation', connection=redis_conn, default_timeout=ALGORITHM_WORKER_TIMEOUT)
 
 result_processing_queue = Queue('result_processing', connection=redis_conn)
 

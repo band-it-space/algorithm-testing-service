@@ -3,7 +3,7 @@ import logging
 import aiohttp
 from datetime import datetime
 from app.services.queue_service import QueueService
-from app.workers.algo_func.get_db_data import get_stock_data_from_db
+from app.workers.algo_func.get_db_data import get_stock_data_from_db, init_db_pool
 from app.services.file_service import FileService
 import os
 import csv
@@ -24,10 +24,10 @@ async def process_algorithm_task(task_data):
 
     try:
         logger.info(f"Processing algorithm task: {task_data['task_id']}")
-        
+        await init_db_pool()
         stock_code = task_data['stock']
- 
-        # records = await get_stock_data_from_db(stock_code)
+
+        # await get_stock_data_from_db(stock_code)
         
         # await get_data_and_save_to_csv(stock_code, "2016-12-08")
         # await signals_for_the_period(stock_code, "2025-10-16")

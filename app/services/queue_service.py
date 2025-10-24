@@ -1,3 +1,4 @@
+import os
 import uuid
 from datetime import datetime
 from typing import Dict, Any
@@ -5,7 +6,7 @@ from app.config.queue_config import algorithm_calculation_queue, result_processi
 from app.models.algorithm_models import AlgorithmRequest, QueueTask
 
 class QueueService:
-    
+
     @staticmethod
     def add_to_algorithm_queue(stock_code: str) -> str:
         """

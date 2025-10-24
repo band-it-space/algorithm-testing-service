@@ -11,7 +11,6 @@ async def init_algo_testing():
     Запускає тестування алгоритму, додаючи завдання до першої черги
     """
     try:
-
         #Робимо запит за всими стоками 
         stocks  = await get_stocks_codes()
 
@@ -20,7 +19,8 @@ async def init_algo_testing():
                 "message": "No stocks found",
                 "status": "error",
             }
-        stocks = ["838", "2800", '981'] #! remove this after testing
+        stocks = ["838", "2800", '981', '998', '334'] #! remove this after testing
+        # stocks = stocks[:5]
         for stock in stocks:
             task_id = QueueService.add_to_algorithm_queue(stock)
             if task_id is None:
