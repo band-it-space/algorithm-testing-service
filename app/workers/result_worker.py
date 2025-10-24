@@ -231,7 +231,7 @@ async def process_result_task(processing_data):
 
         #TODO Обробка даних
         match_count = 0
-        deviations_signals = 0
+        deviations = 0
         deviations_data = []
         unmatched_api_data = []
 
@@ -240,89 +240,110 @@ async def process_result_task(processing_data):
             i = 0
             while i < len(unified_algo_data):
                 csv_item = unified_algo_data[i]
-                
-                if (api_item.buy_signal == csv_item.buy_signal and
-                    api_item.stop_signal == csv_item.stop_signal):
-                    match_count += 1
+                exact_buy = api_item.buy_signal == csv_item.buy_signal
+                except_sell = api_item.stop_signal == csv_item.stop_signal
+
+
+                if (exact_buy and except_sell):
+                    match_count += 2
 
                     unified_algo_data.pop(i)
                     found_match = True
                     break
                 
-                else:
-                    #buy_signal
-                    api_buy_index = None
-                    csv_buy_index = None
+                
+                
+                #buy_signal
+                api_buy_index = None
+                csv_buy_index = None
                     
-                    if api_item.buy_signal:
-                        try:
-                            api_buy_index = trade_days.index(api_item.buy_signal)
-                        except ValueError:
+                if api_item.buy_signal:
+                    try:
+                        api_buy_index = trade_days.index(api_item.buy_signal)
+                    except ValueError:
                             logger.info(f"API buy_signal {api_item.buy_signal} не знайдено в trade_days")
                     
-                    if csv_item.buy_signal:
-                        try:
-                            csv_buy_index = trade_days.index(csv_item.buy_signal)
-                        except ValueError:
-                            logger.info(f"CSV buy_signal {csv_item.buy_signal} не знайдено в trade_days")
+                if csv_item.buy_signal:
+                    try:
+                        csv_buy_index = trade_days.index(csv_item.buy_signal)
+                    except ValueError:
+                        logger.info(f"CSV buy_signal {csv_item.buy_signal} не знайдено в trade_days")
                     
-                    if api_buy_index is not None and csv_buy_index is not None:
-                        index_diff = abs(api_buy_index - csv_buy_index)
-                        buy_match = index_diff <= 2
-                    else:
-                        buy_match = False
+                if api_buy_index is not None and csv_buy_index is not None:
+                    index_diff = abs(api_buy_index - csv_buy_index)
+                    buy_match = index_diff <= 2
+                else:
+                    buy_match = False
                     
-                    #stop_signal
-                    api_stop_index = None
-                    csv_stop_index = None
+                #stop_signal
+                api_stop_index = None
+                csv_stop_index = None
                     
-                    if (api_item.stop_signal and csv_item.stop_signal and 
-                        api_item.stop_signal != "Open position" and csv_item.stop_signal != "Open position"):
-                        try:
-                            if isinstance(api_item.stop_signal, datetime):
-                                api_stop_index = trade_days.index(api_item.stop_signal)
-                        except ValueError:
-                            logger.info(f"API stop_signal {api_item.stop_signal} не знайдено в trade_days")
+                if (api_item.stop_signal and csv_item.stop_signal and 
+                    api_item.stop_signal != "Open position" and csv_item.stop_signal != "Open position"):
+                    try:
+                        if isinstance(api_item.stop_signal, datetime):
+                            api_stop_index = trade_days.index(api_item.stop_signal)
+                    except ValueError:
+                        logger.info(f"API stop_signal {api_item.stop_signal} не знайдено в trade_days")
                         
-                        try:
-                            if isinstance(csv_item.stop_signal, datetime):
-                                csv_stop_index = trade_days.index(csv_item.stop_signal)
-                        except ValueError:
-                            logger.info(f"CSV stop_signal {csv_item.stop_signal} не знайдено в trade_days")
+                    try:
+                        if isinstance(csv_item.stop_signal, datetime):
+                            csv_stop_index = trade_days.index(csv_item.stop_signal)
+                    except ValueError:
+                        logger.info(f"CSV stop_signal {csv_item.stop_signal} не знайдено в trade_days")
                         
-                        if api_stop_index is not None and csv_stop_index is not None:
-                            index_diff = abs(api_stop_index - csv_stop_index)
-
-                            stop_match = index_diff <= 2
-                        else:
-                            stop_match = False
-
-                    elif api_item.stop_signal == csv_item.stop_signal:
-                        stop_match = True
+                    if api_stop_index is not None and csv_stop_index is not None:
+                        index_diff = abs(api_stop_index - csv_stop_index)
+                        stop_match = index_diff <= 2
                     else:
                         stop_match = False
+
+                elif api_item.stop_signal == csv_item.stop_signal:
+                    stop_match = True
+                else:
+                    stop_match = False
                 
-                    if buy_match and stop_match:
-                        deviations_signals += 1
-                        deviations_data.append(f'Buy: Algo - {csv_item.buy_signal} / API - {api_item.buy_signal}, Sell: Algo - {csv_item.stop_signal} / API - {api_item.stop_signal};')
-                        unified_algo_data.pop(i)
-                        found_match = True
-                        break
-                    else:
-                        i += 1
+                if buy_match and not exact_buy and stop_match and not except_sell:
+                    deviations += 2
+                    deviations_data.append(f'Buy: Algo - {csv_item.buy_signal} / API - {api_item.buy_signal};')
+                    deviations_data.append(f'Sell: Algo - {csv_item.stop_signal} / API - {api_item.stop_signal};')
+                    unified_algo_data.pop(i)
+                    found_match = True
+                    break
+
+                if (exact_buy or except_sell):
+                    match_count += 1
+
+                if (buy_match and not exact_buy or stop_match and not except_sell):
+                    deviations += 1
+                    if stop_match and not except_sell:
+                        deviations_data.append(f'Sell: Algo - {csv_item.stop_signal} / API - {api_item.stop_signal};')
+
+                    if buy_match and not exact_buy: 
+                        deviations_data.append(f'Buy: Algo - {csv_item.buy_signal} / API - {api_item.buy_signal};')
+                if ((exact_buy and  stop_match) or (except_sell and buy_match)):
+                    unified_algo_data.pop(i)
+                    found_match = True
+                    break
+                
+                i += 1
             
             if not found_match:
                 unmatched_api_data.append(f'Buy:{api_item.buy_signal}, Sell:{api_item.stop_signal};')
 
 
-        total_api_count = len(unified_api_data)
-        total_match_percent = round(((match_count + deviations_signals) / total_api_count * 100), 2) if total_api_count > 0 else 0
+        total_api_count = len(unified_api_data)*2
+        total_algo = len(new_algo_data)*2
+        total_unmatched = total_api_count - match_count - deviations
+        total_match_percent = round(((match_count + deviations) / total_api_count * 100), 2) if total_api_count > 0 else 0
         logger.info("------------------------------" )
         logger.info(f"Stock: {stock_code}")
         logger.info(f"Total API signals: {total_api_count}")
-        logger.info(f"Total CSV signals: {len(new_algo_data)}")
+        logger.info(f"Total CSV signals: {total_algo}")
         logger.info(f"Total exact matches: {match_count}" )
-        logger.info(f"Deviations matches (±2 trading days): {deviations_signals}")
+        logger.info(f"Total unmatched: {total_unmatched}" )
+        logger.info(f"Deviations matches (±2 trading days): {deviations}")
         logger.info(f"Deviations data: {deviations_data}")
         logger.info(f"Unmatched CSV signals: {len(unified_algo_data)}")
         logger.info(f"Unmatched CSV values: {unified_algo_data}")
@@ -336,9 +357,10 @@ async def process_result_task(processing_data):
             'stock_code': stock_code,
             'timestamp': datetime.now().isoformat(),
             'total_api': f'{total_api_count}',
-            'total_algo': f'{len(new_algo_data)}',
+            'total_algo': f'{total_algo}',
             'total_exact': f'{match_count}',
-            'with_deviation': f'{deviations_signals}',
+            'total_unmatched': f'{total_unmatched}',
+            'with_deviation': f'{deviations}',
             'deviations_data': ' | '.join(deviations_data) if deviations_data else '',
             'unmatched_api': f'{len(unmatched_api_data)}',
             'unmatched_api_data': ' | '.join(unmatched_api_data) if unmatched_api_data else '',
@@ -347,7 +369,7 @@ async def process_result_task(processing_data):
             'match_percent': f'{total_match_percent}'
         }]
         
-        field_names = ['stock_code', 'timestamp', 'total_api','total_algo', 'total_exact', 'with_deviation', 'deviations_data', 'unmatched_api', 'unmatched_api_data', 'unmatched_algo', 'unmatched_algo_data', 'match_percent' ]
+        field_names = ['stock_code', 'timestamp', 'total_api','total_algo', 'total_exact', 'total_unmatched', 'with_deviation', 'deviations_data', 'unmatched_api', 'unmatched_api_data', 'unmatched_algo', 'unmatched_algo_data', 'match_percent' ]
         
         # Додаємо результат до третьої черги
         QueueService.add_to_file_write_queue(stock_code, results_data, field_names)
