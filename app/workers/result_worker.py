@@ -232,6 +232,7 @@ async def process_result_task(processing_data):
         #TODO Обробка даних
         match_count = 0
         deviations_signals = 0
+        deviations_data = []
         unmatched_api_data = []
 
         for api_item in unified_api_data:
@@ -303,7 +304,7 @@ async def process_result_task(processing_data):
                 
                     if buy_match and stop_match:
                         deviations_signals += 1
-
+                        deviations_data.append(f'Buy: Algo - {csv_item.buy_signal} / API - {api_item.buy_signal}, Sell: Algo - {csv_item.stop_signal} / API - {api_item.stop_signal};')
                         unified_algo_data.pop(i)
                         found_match = True
                         break
@@ -311,33 +312,42 @@ async def process_result_task(processing_data):
                         i += 1
             
             if not found_match:
-                unmatched_api_data.append(api_item)  
+                unmatched_api_data.append(f'Buy:{api_item.buy_signal}, Sell:{api_item.stop_signal};')
 
-        
+
+        total_api_count = len(unified_api_data)
+        total_match_percent = round(((match_count + deviations_signals) / total_api_count * 100), 2) if total_api_count > 0 else 0
         logger.info("------------------------------" )
         logger.info(f"Stock: {stock_code}")
-        logger.info(f"Total API signals: {len(unified_api_data)}")
+        logger.info(f"Total API signals: {total_api_count}")
         logger.info(f"Total CSV signals: {len(new_algo_data)}")
         logger.info(f"Total exact matches: {match_count}" )
         logger.info(f"Deviations matches (±2 trading days): {deviations_signals}")
+        logger.info(f"Deviations data: {deviations_data}")
         logger.info(f"Unmatched CSV signals: {len(unified_algo_data)}")
         logger.info(f"Unmatched CSV values: {unified_algo_data}")
         logger.info(f"Unmatched API signals: {len(unmatched_api_data)}")
         logger.info(f"Unmatched API values: {unmatched_api_data}")
-   
+        logger.info(f"Match percent: {total_match_percent}")
+
+
         # TODO Зберігаємо в черзі для безпечного додавання в файл
         results_data = [{
             'stock_code': stock_code,
             'timestamp': datetime.now().isoformat(),
-            'total_api': f'{len(unified_api_data)}',
+            'total_api': f'{total_api_count}',
             'total_algo': f'{len(new_algo_data)}',
             'total_exact': f'{match_count}',
             'with_deviation': f'{deviations_signals}',
+            'deviations_data': ' | '.join(deviations_data) if deviations_data else '',
             'unmatched_api': f'{len(unmatched_api_data)}',
+            'unmatched_api_data': ' | '.join(unmatched_api_data) if unmatched_api_data else '',
             'unmatched_algo': f'{len(unified_algo_data)}',
+            'unmatched_algo_data': ' | '.join([f'Buy:{item.buy_signal}, Sell:{item.stop_signal};' for item in unified_algo_data]) if unified_algo_data else '',
+            'match_percent': f'{total_match_percent}'
         }]
         
-        field_names = ['stock_code', 'timestamp', 'total_api','total_algo', 'total_exact', 'with_deviation', 'unmatched_api', 'unmatched_algo' ]
+        field_names = ['stock_code', 'timestamp', 'total_api','total_algo', 'total_exact', 'with_deviation', 'deviations_data', 'unmatched_api', 'unmatched_api_data', 'unmatched_algo', 'unmatched_algo_data', 'match_percent' ]
         
         # Додаємо результат до третьої черги
         QueueService.add_to_file_write_queue(stock_code, results_data, field_names)
