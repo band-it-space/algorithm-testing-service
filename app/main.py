@@ -5,7 +5,7 @@ from app.config.logging_config import setup_logging
 from app.controllers.algorithm_controller import algorithm_router
 from app.controllers.monitoring_controller import monitoring_router
 from app.workers.algorithm_worker import process_algorithm_task
-
+from app.workers.algo_func.get_db_data import init_db_pool
 from app.workers.result_worker import process_result_task
 
 setup_logging()
@@ -34,4 +34,5 @@ async def test():
 @app.get("/test-algo")
 async def testAlgo():
     logger.info("Testing the algo")
+    await init_db_pool()
     return await process_algorithm_task({"stock": "2800", "task_id": 1})
