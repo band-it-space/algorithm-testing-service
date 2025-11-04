@@ -2,7 +2,7 @@ from app.services.get_all_stoccks import get_stocks_codes
 from fastapi import APIRouter, HTTPException
 from app.models.algorithm_models import AlgorithmRequest, AlgorithmResponse
 from app.services.queue_service import QueueService
-
+from app.services.file_service import FileService
 algorithm_router = APIRouter()
 
 @algorithm_router.get("/")
@@ -12,16 +12,20 @@ async def init_algo_testing():
     """
     try:
         #Робимо запит за всими стоками 
-        stocks  = await get_stocks_codes()
+        # stocks  = await get_stocks_codes()
+        file_service = FileService()
+        screener_stocks = await file_service.read_data_from_csv("test_100")
 
-        if len(stocks) == 0:
+        if len(screener_stocks) == 0:
             return {
                 "message": "No stocks found",
                 "status": "error",
             }
-        stocks = ["838", "2800", '981', '998', '334'] #! remove this after testing
-        # stocks = stocks[:5]
-        for stock in stocks:
+        # '1333','2609','6168'
+
+        screener_stocks = [ '189' ] #! remove this after testing
+
+        for stock in screener_stocks:
             task_id = QueueService.add_to_algorithm_queue(stock)
             if task_id is None:
                 return {
@@ -31,7 +35,7 @@ async def init_algo_testing():
 
         return {
             "message": "Algorithm testing started successfully",
-            "stocks": stocks,
+            "stocks": screener_stocks,
             "status": "queued",
         }
     

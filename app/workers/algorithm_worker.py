@@ -24,15 +24,22 @@ async def process_algorithm_task(task_data):
 
     try:
         logger.info(f"Processing algorithm task: {task_data['task_id']}")
-        # await init_db_pool()
+        await init_db_pool()
         stock_code = task_data['stock']
 
         # await get_stock_data_from_db(stock_code)
-        
+        logger.info('Starting get_data_and_save_to_csv')
         await get_data_and_save_to_csv(stock_code, "2019-01-02")
+        logger.info('Finished get_data_and_save_to_csv')
+
+        logger.info('Starting signals_for_the_period')
         await signals_for_the_period(stock_code, "2025-10-16")
+        logger.info('Finished signals_for_the_period')
+
+        logger.info('Starting format_signals_csv_inplace')
         await format_signals_csv_inplace(file_service=FileService(), file_name=stock_code)
-        
+        logger.info('Finished format_signals_csv_inplace')
+
         # Додаємо результат до другої черги
         processing_task_id = QueueService.add_to_result_processing_queue(stock_code)
         
@@ -49,7 +56,7 @@ async def get_data_and_save_to_csv(code: str, trade_date: str, file_service: "Fi
     if file_service is None:
         file_service = FileService()
 
-    code_data_raw = await get_stock_data_from_db(code, "2025-10-16")
+    code_data_raw = await get_stock_data_from_db(code, "2025-10-17")
 
     first_date = code_data_raw[0]["date"] if code_data_raw else None
     effective_date = first_date if (first_date and first_date > trade_date) else trade_date
@@ -89,16 +96,17 @@ async def get_data_and_save_to_csv(code: str, trade_date: str, file_service: "Fi
     }
 
     try:
-        saved = file_service.add_data_to_csv(
+        saved = await file_service.add_data_to_csv(
             file_name=code,         
             data=[csv_row],
             fieldnames=fieldnames,
         )
+
         if saved:
-            print(f"Дані успішно записано у файл data/{code}.csv")
+            # logger.info(f"Дані успішно записано у файл data/{code}.csv")
             return csv_row
         else:
-            print("Помилка під час запису CSV через FileService")
+            # logger.info("Помилка під час запису CSV через FileService")
             return None
 
     except Exception as e:
@@ -110,7 +118,7 @@ async def signals_for_the_period(code, trade_date):
     spy_data_raw = await get_stock_data_from_db("2800", trade_date)
     code_data_raw = await get_stock_data_from_db(code, trade_date)
 
-    print(spy_data_raw[0])
+    # print(f'Spy- {spy_data_raw[0]}')
 
     spy_data = [
         OHLCV(
@@ -135,10 +143,10 @@ async def signals_for_the_period(code, trade_date):
         for bar in code_data_raw
     ]
     
-    print(code_data[0])
+    # logger.info(f'Code_data-{code_data[0]}')
 
     latest_signal = await get_latest_signal(code)
-    logger.info(f"latest_signal {latest_signal}")
+    # logger.info(f"latest_signal {latest_signal}")
 
     if latest_signal is None:
         print(f"Немає сигналу для коду {code}")
@@ -154,7 +162,7 @@ async def signals_for_the_period(code, trade_date):
         if bar_date > latest_date:
             filtered_code_data.append(bar)
 
-    print(len(filtered_code_data))
+    # print(len(filtered_code_data))
     
     results_batch: List[Dict[str, Any]] = []
 
@@ -173,7 +181,7 @@ async def signals_for_the_period(code, trade_date):
             tradeday.strftime("%Y-%m-%d"), filtered_code, filtered_spy
         )
 
-        print(latest_signal)
+        # print(latest_signal)
 
         position_status = latest_signal["position_status"]
 
@@ -181,6 +189,8 @@ async def signals_for_the_period(code, trade_date):
             buySignals = runAllBuyConditions(
                 filtered_code, tradeday.strftime("%Y-%m-%d"), filtered_spy
             )
+            logger.info(f'Trade day: {tradeday.strftime("%Y-%m-%d")}, stock: {code}')
+            logger.info(F'Buy signals: {buySignals}')
             buy = isBuy(buySignals)
 
             exit_price = 0
@@ -211,21 +221,21 @@ async def signals_for_the_period(code, trade_date):
                 "next_open_action": "B" if buy else "N",
             }
             results_batch.append(result)
-            print(result)
+            # logger.info(result)
             # return result
 
         elif position_status == "I":
             entry_date = latest_signal.get("entry_date")
             entry_price = latest_signal.get("entry_price")
 
-            print(entry_date)
-            print(entry_price)
+            # logger.info(entry_date)
+            # logger.info(entry_price)
 
             if latest_signal["next_open_action"] == "B":
                 entry_date = tradeday.strftime("%Y-%m-%d")
                 entry_price = bar.open
-                print(entry_date)
-                print(entry_price)
+                # print(entry_date)
+                # print(entry_price)
 
 
             # next_open_action = latest_signal.get("next_open_action")
@@ -238,6 +248,8 @@ async def signals_for_the_period(code, trade_date):
                 exit1,
                 tradeday.strftime("%Y-%m-%d"),
             )
+            logger.info(f'Trade day: {tradeday.strftime("%Y-%m-%d")}, stock: {code}')
+            logger.info(f'Sell signals: {sellSignals}')
             sell = isSell(sellSignals['conditions'])
             new_stop_loss = sellSignals['stop_loss']
             result = {
@@ -264,12 +276,12 @@ async def signals_for_the_period(code, trade_date):
                 "next_open_action": "S" if sell else "N",
             }
             results_batch.append(result)
-            print(result)
+            # print(result)
             # return result
             
-    if results_batch:
-        ok = append_to_signals_csv(results_batch, code)
-        logger.info(f"Appended {len(results_batch)} rows to {code}.csv: {'OK' if ok else 'FAILED'}")        
+    if len(results_batch) > 0:
+        ok = await append_to_signals_csv(results_batch, code)
+        # logger.info(f"Appended {len(results_batch)} rows to {code}.csv: {'OK' if ok else 'FAILED'}")        
             
 def to_float_or_none(v):
     if v is None:
@@ -286,7 +298,7 @@ def to_float_or_none(v):
     except ValueError:
         return None            
 
-def append_to_signals_csv(
+async def append_to_signals_csv(
     result_data: Union[Dict[str, Any], List[Dict[str, Any]]],
     file_name,
     file_service: "FileService" = None,
@@ -323,7 +335,7 @@ def append_to_signals_csv(
     else:
         rows = [_normalize_row(r) for r in result_data]
 
-    return file_service.add_data_to_csv(
+    return await file_service.add_data_to_csv(
         file_name=file_name,
         data=rows,
         fieldnames=fieldnames,

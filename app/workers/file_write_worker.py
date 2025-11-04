@@ -6,7 +6,7 @@ from app.services.file_service import FileService
 logger = logging.getLogger(__name__)
 file_service = FileService()
 
-def process_file_write_task(task_data):
+async def process_file_write_task(task_data):
     """
     Обробляє завдання запису файлу з черги
     """
@@ -18,7 +18,7 @@ def process_file_write_task(task_data):
         logger.info("------------------------------" )
         logger.info(f"Processing file write task for stock: {stock_code}")
         
-        success = file_service.add_data_to_csv("results", results_data, field_names)
+        success = await file_service.add_data_to_csv("results", results_data, field_names)
         
         if success:
             logger.info(f"File write task completed successfully for stock: {stock_code}")

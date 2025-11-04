@@ -1,6 +1,9 @@
 import numpy as np
 from typing import List, Dict, Optional, Union
+import logging
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class OHLCV:
@@ -132,7 +135,7 @@ def checkB1(ohlcv: List[OHLCV]) -> bool:
     return (condNewHigh or condBoll) and condCloseInUpperRange
 
 def checkB3(ohlcv: List[OHLCV]) -> bool:
-    if not ohlcv:
+    if not ohlcv: 
         return False
 
     closes = [bar.close for bar in ohlcv]
@@ -141,7 +144,7 @@ def checkB3(ohlcv: List[OHLCV]) -> bool:
     if len(bb) < 72 + 58:
         return False
 
-    bbw = [(x['upper'] - x['lower']) / x['middle'] for x in bb]
+    bbw = [(x['upper'] - x['lower']) / x['middle'] * 100  for x in bb]
 
     smaBBW = sma(bbw, 72)
     if len(smaBBW) < 58:
@@ -315,7 +318,7 @@ def checkB18(ohlcv: List[OHLCV]) -> bool:
     cond2 = lastSMA150 > lastSMA200
     if len(sma200) < 22:
         return False
-    sma200_21d_ago = sma200[-1 - 21]
+    sma200_21d_ago = sma200[-1 - 20]
     cond3 = lastSMA200 > sma200_21d_ago
     cond4 = lastSMA50 > lastSMA150 and lastSMA50 > lastSMA200
     cond5 = lastClose > lastSMA50
@@ -326,14 +329,19 @@ def checkB18(ohlcv: List[OHLCV]) -> bool:
     cond7 = lastClose >= last250High * 0.75
 
     bb21 = bollinger_bands(closes, 21, 2)
+
     if len(bb21) < 82:
         return False
-    bbw = [b['upper'] - b['lower'] for b in bb21]
+
+    
+    bbw = [(b['upper'] - b['lower']) / b['middle'] * 100 for b in bb21]
+
     avgBBW21 = mean(bbw[-21:])
     avgBBW82 = mean(bbw[-82:])
     lastBB21 = bb21[-1]
-    cond8 = avgBBW21 < 0.22 * avgBBW82 and lastClose > lastBB21['upper']
-
+    cond8 = (avgBBW21 < 0.22 * avgBBW82) and (lastClose > lastBB21['upper'])
+    
+    logger.info(f'B18 Conditions: {cond1}, {cond2}, {cond3}, {cond4}, {cond5}, {cond6}, {cond7}, {cond8}')
     return cond1 and cond2 and cond3 and cond4 and cond5 and cond6 and cond7 and cond8
 
 def mean(arr: List[float]) -> float:

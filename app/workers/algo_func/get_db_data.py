@@ -61,16 +61,16 @@ async def get_stock_data_from_db(code: str, end_date: str | None = None):
 
             stock_records = [rec for rec in stock_records if rec not in empty_records]
 
-            if end_date:
-                idx = next((i for i, rec in enumerate(stock_records) if rec["date"] == end_date), None)
-                if idx is None:
-                    raise ValueError(f"Date {end_date} not found in stock records for {code}")
-                stock_records = stock_records[: idx + 1]
+            # if end_date:
+            #     idx = next((i for i, rec in enumerate(stock_records) if rec["date"] == end_date), None)
+            #     if idx is None:
+            #         raise ValueError(f"Date {end_date} not found in stock records for {code}")
+            #     stock_records = stock_records[: idx + 1]
 
-            print(
-                f"Retrieved {len(stock_records)} records for stock {code}"
-                + (f" up to {end_date}" if end_date else "")
-            )
+            # print(
+            #     f"Retrieved {len(stock_records)} records for stock {code}"
+            #     + (f" up to {end_date}" if end_date else "")
+            # )
             return stock_records
 
 
