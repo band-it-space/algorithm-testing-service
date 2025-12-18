@@ -259,3 +259,24 @@ The service automatically:
 -   **API Health**: `GET /health`
 -   **Redis Health**: Automatic health checks in Docker Compose
 -   **Worker Health**: Monitor via RQ Dashboard or API endpoints
+
+bb21 = bollinger_bands(closes, 21, 2)
+bb82 = bollinger_bands(closes, 82, 2)
+
+    bbw21 = [(b['upper'] - b['lower']) / b["middle"] * 100 for b in bb21]
+    bbw82 = [(b['upper'] - b['lower']) / b["middle"] * 100 for b in bb82]
+
+    bbw_past_21 = bbw21[-21:]
+    bbw_past_82 = bbw21[-82:]
+    avgBBW21 = mean(bbw_past_21)
+    sorted82 = sorted(bbw_past_82)
+    idx = int(0.22 * len(sorted82))  # індекс елемента на ~22-му перцентилі
+    if idx >= len(sorted82):
+        idx = len(sorted82) - 1
+    p22 = sorted82[idx]
+    volatility_ok = avgBBW21 < p22
+    lastClose = closes[-1]
+    lastBB21 = bb21[-1]
+    price_ok = lastClose > lastBB21["upper"]
+
+    cond8 = volatility_ok and price_ok

@@ -1,20 +1,22 @@
-import time
+import pandas as pd
+import numpy as np
 import logging
-import aiohttp
+import os
+import csv
+import requests
 from datetime import datetime
+
 from app.services.queue_service import QueueService
 from app.workers.algo_func.get_db_data import get_stock_data_from_db, init_db_pool
 from app.services.file_service import FileService
-import os
-import csv
 from app.workers.algo_func.buy_signals import runAllBuyConditions, isBuy, OHLCV
 from typing import Optional, Dict, Any, List, Union
 from app.workers.algo_func.sell_signals import runAllSellConditions, isSell
 from app.workers.algo_func.get_code_energy import calculate_energy_indicators_last_16_days
-import pandas as pd
-import numpy as np
+
 
 logger = logging.getLogger(__name__)
+API_KEY = os.getenv('API_KEY')
 
 async def process_algorithm_task(task_data):
     """
@@ -23,17 +25,68 @@ async def process_algorithm_task(task_data):
     """
 
     try:
-        logger.info(f"Processing algorithm task: {task_data['task_id']}")
-        await init_db_pool()
         stock_code = task_data['stock']
+        logger.info(f"Processing algorithm task: {stock_code}")
+        await init_db_pool()
 
-        # await get_stock_data_from_db(stock_code)
+        # db_data_all = await get_stock_data_from_db(stock_code, "2025-12-03")
+        # logger.info(f"Total dates in DB - {len(db_data_all)}")
+        # db_data_all.sort(key=lambda x: datetime.strptime(x['date'], "%Y-%m-%d"))
+
+
+        # API_URL =f'http://ete.stockfisher.com.hk/v1.1/debugHKEX/verifyData?TradeDay=&Code={stock_code}&verifyType=price'
+        # headers = {
+        #     'x-api-key': API_KEY,
+        # }
+        # response = requests.get(API_URL, headers=headers)
+        # response.raise_for_status()
+
+        # api_data_all = response.json()
+        # api_data_all.sort(key=lambda x: datetime.fromisoformat(x['TradeDay'].replace("Z", "+00:00")))
+        # logger.info(f"Total dates in API - {len(api_data_all)}")
+        # # logger.info(api_data[:1])  
+
+        # db_dates = {datetime.strptime(r['date'], "%Y-%m-%d").date() for r in db_data_all 
+        #             if datetime.strptime(r['date'], "%Y-%m-%d").year >= 2019}
+        # api_dates = {
+        #     datetime.fromisoformat(r['TradeDay'].replace("Z", "+00:00")).date() for r in api_data_all
+        #     if datetime.fromisoformat(r['TradeDay'].replace("Z", "+00:00")).year >= 2019
+        # }
+        
+        # from_api_to_db = sorted(list(api_dates - db_dates))
+        # from_db_to_api = sorted(list(db_dates - api_dates))
+
+
+        # if from_api_to_db:
+        #     logger.warning(f"❌ Missing {len(from_api_to_db)} dates in DB for {stock_code}")
+        #     logger.warning(f"Examples: {from_api_to_db[:10]}")
+        # else:
+        #     logger.info(f"✅ All {len(db_dates)} DB dates are present in API for {stock_code}")
+
+        # if from_db_to_api:
+        #     logger.warning(f"❌ Missing {len(from_db_to_api)} dates in API for {stock_code}")
+        #     logger.warning(f"Examples: {from_db_to_api[:10]}")
+
+        # # Додаємо результат до другої черги
+        # processing_task_id = QueueService.add_to_file_write_queue( 
+        #     stock_code,
+        #     len(api_data_all) or 0,
+        #     len(db_data_all) or 0,
+        #     len(api_dates) or 0,
+        #     len(db_dates) or 0,
+        #     from_api_to_db or [],
+        #     from_db_to_api or [],
+        # )
+
+
+
+
         logger.info('Starting get_data_and_save_to_csv')
         await get_data_and_save_to_csv(stock_code, "2019-01-02")
         logger.info('Finished get_data_and_save_to_csv')
 
         logger.info('Starting signals_for_the_period')
-        await signals_for_the_period(stock_code, "2025-10-16")
+        await signals_for_the_period(stock_code, "2025-12-11")
         logger.info('Finished signals_for_the_period')
 
         logger.info('Starting format_signals_csv_inplace')
@@ -56,8 +109,7 @@ async def get_data_and_save_to_csv(code: str, trade_date: str, file_service: "Fi
     if file_service is None:
         file_service = FileService()
 
-    code_data_raw = await get_stock_data_from_db(code, "2025-10-17")
-
+    code_data_raw = await get_stock_data_from_db(code, "2025-12-11")
     first_date = code_data_raw[0]["date"] if code_data_raw else None
     effective_date = first_date if (first_date and first_date > trade_date) else trade_date
 
@@ -113,6 +165,8 @@ async def get_data_and_save_to_csv(code: str, trade_date: str, file_service: "Fi
         print(f"Помилка при записі CSV: {e}")
         return None
 
+
+# Write calculated metrics to CVS - before signals
 async def signals_for_the_period(code, trade_date):
     print("start")
     spy_data_raw = await get_stock_data_from_db("2800", trade_date)
@@ -280,7 +334,7 @@ async def signals_for_the_period(code, trade_date):
             # return result
             
     if len(results_batch) > 0:
-        ok = await append_to_signals_csv(results_batch, code)
+        await append_to_signals_csv(results_batch, code)
         # logger.info(f"Appended {len(results_batch)} rows to {code}.csv: {'OK' if ok else 'FAILED'}")        
             
 def to_float_or_none(v):

@@ -2,8 +2,11 @@
 from fastapi import FastAPI
 import logging
 from app.config.logging_config import setup_logging
+
 from app.controllers.algorithm_controller import algorithm_router
+from app.controllers.data_test_controller import data_test_controller
 from app.controllers.monitoring_controller import monitoring_router
+
 from app.workers.algorithm_worker import process_algorithm_task
 from app.workers.algo_func.get_db_data import init_db_pool
 from app.workers.result_worker import process_result_task
@@ -20,6 +23,11 @@ app.include_router(monitoring_router, prefix="/api/v1/monitoring", tags=["monito
 @app.get("/")
 async def root():
     return {"message": "Algorithm Testing Service is running"}
+
+@app.get('/data-test')
+async def data_test():
+    await data_test_controller()
+    return {"message": "Data test endpoint"}
 
 @app.get("/health")
 async def health_check():

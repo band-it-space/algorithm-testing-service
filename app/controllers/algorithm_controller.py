@@ -12,21 +12,32 @@ async def init_algo_testing():
     """
     try:
         #Робимо запит за всими стоками 
-        # stocks  = await get_stocks_codes()
-        file_service = FileService()
-        screener_stocks = await file_service.read_data_from_csv("test_100")
+        #stocks  = await get_stocks_codes()
 
-        if len(screener_stocks) == 0:
+        file_service = FileService()
+        stocks = await file_service.read_data_from_csv("screener")
+        
+        if len(stocks) == 0:
             return {
                 "message": "No stocks found",
                 "status": "error",
             }
-        # '1333','2609','6168'
+        # stocks = stocks[:1]
+        exist = await file_service.read_data_from_csv("results")
 
-        screener_stocks = [ '189' ] #! remove this after testing
+        existing_codes = {str(item.get("stock_code")) for item in exist}
+        
+        done = []
+        added = []
+        for stock in stocks:
+            code = str(stock.get("Code")).strip()
 
-        for stock in screener_stocks:
-            task_id = QueueService.add_to_algorithm_queue(stock)
+            if code in existing_codes:
+                done.append(code)
+                continue
+            added.append(code)
+
+            task_id = QueueService.add_to_algorithm_queue(code)
             if task_id is None:
                 return {
                     "message": "Failed to add stock to queue",
@@ -34,8 +45,9 @@ async def init_algo_testing():
                 }
 
         return {
-            "message": "Algorithm testing started successfully",
-            "stocks": screener_stocks,
+            "message": f'Done: {len(done)}, Added to queue: {len(added)}',
+            "done": done,
+            'added': added,
             "status": "queued",
         }
     

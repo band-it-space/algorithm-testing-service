@@ -1,7 +1,7 @@
 import os
 import uuid
-from datetime import datetime
-from typing import Dict, Any
+from datetime import datetime, date
+from typing import Dict, List
 from app.config.queue_config import algorithm_calculation_queue, result_processing_queue
 from app.models.algorithm_models import AlgorithmRequest, QueueTask
 
@@ -49,7 +49,32 @@ class QueueService:
         )
         
         return task_id
-    
+    @staticmethod
+    # def add_to_file_write_queue(stock_code: str, total_api:int, total_db:int, sorted_api:int, sorted_db: int, missed_db:List[date], missed_api:List[date]) -> str:
+    #     """
+    #     Додає результат до черги запису у файл для 
+    #     """
+    #     task_id = str(uuid.uuid4())
+        
+    #     processing_data = {
+    #         "task_id": task_id,
+    #         "stock_code": stock_code,
+    #         "missed_db": missed_db,
+    #         "missed_api": missed_api,
+    #         "total_api": total_api,
+    #         "total_db": total_db,
+    #         "sorted_api": sorted_api,
+    #         "sorted_db": sorted_db
+    #     }
+        
+    #     # Додаємо завдання до черги обробки результатів
+    #     job = result_processing_queue.enqueue(
+    #         'app.workers.file_write_worker.process_file_write_task',
+    #         processing_data,
+    #         job_id=task_id
+    #     )
+        
+    #     return task_id
     @staticmethod
     def add_to_file_write_queue(stock_code: str, results_data, field_names) -> str:
         """

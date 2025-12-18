@@ -69,9 +69,27 @@ def setup_logging() -> None:
                     "encoding": "utf-8",
                     "formatter": "default",
                     "level": level,
-                },                 
+                },               
+                "data_testing": {
+                    "class": "logging.handlers.TimedRotatingFileHandler",
+                    "filename": os.path.join(log_dir, "data-testing.log"),
+                    "when": "midnight",
+                    "backupCount": 7,
+                    "encoding": "utf-8",
+                    "formatter": "default",
+                    "level": level,
+                },                   
                 "console": {
                     "class": "logging.StreamHandler",
+                    "formatter": "default",
+                    "level": level,
+                },
+                "default_file": {
+                    "class": "logging.handlers.TimedRotatingFileHandler",
+                    "filename": os.path.join(log_dir, "app.log"),
+                    "when": "midnight",
+                    "backupCount": 7,
+                    "encoding": "utf-8",
                     "formatter": "default",
                     "level": level,
                 },
@@ -97,8 +115,13 @@ def setup_logging() -> None:
                     "level": level,
                     "propagate": False,
                 },
+                "app.controllers.data_test_controller": {
+                    "handlers": ["data_testing", "console"],
+                    "level": level,
+                    "propagate": False,
+                },
             },
-            "root": {"handlers": ["console"], "level": level},
+            "root": {"handlers": ["console", "default_file"], "level": level},
         }
     )
 

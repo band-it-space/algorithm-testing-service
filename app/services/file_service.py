@@ -21,7 +21,6 @@ class FileService:
         
     async def add_data_to_csv(self, file_name: str, data: list, fieldnames: list):
         try:
-            logger.info(f"Data to be written to {file_name}.csv: {data}")
             file_path = f"{self.data_dir}/{file_name}.csv"
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             existing_header = self._read_existing_header(file_path)
