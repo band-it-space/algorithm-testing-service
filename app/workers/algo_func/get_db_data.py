@@ -2,7 +2,13 @@ import os
 import aiomysql
 import asyncio
 from dotenv import load_dotenv
-from datetime import datetime
+
+
+
+
+import requests
+from datetime import datetime, date
+from typing import Any, Dict, List, Optional
 
 load_dotenv()
 
@@ -123,16 +129,3 @@ async def get_stock_data_from_db(code: str, end_date: str | None = None):
             #     + (f" up to {end_date}" if end_date else "")
             # )
             return stock_records
-
-
-# Для локального тестування
-# if __name__ == "__main__":
-#     async def main():
-#         await init_db_pool()
-#         data = await get_stock_data_from_db("2800", "2025-09-15")
-#         print(data[-1])
-
-#         pool.close()
-#         await pool.wait_closed()
-
-#     asyncio.run(main())

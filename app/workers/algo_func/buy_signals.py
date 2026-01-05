@@ -149,12 +149,12 @@ def checkB1(ohlcv: List[OHLCV], targetDate) -> bool:
     if len(ohlcv) < 21:
         return False
     prev20High = max(highs[-21:-1])
-    condNewHigh = last.high > prev20High
+    condNew20DHigh = last.high > prev20High
 
     bb = bollinger_bands(closes, 51, 1.9)
     sma51 = sma(closes, 51)
 
-    condBoll = False
+    condBB = False
     if bb and sma51:
         lastBB = bb[-1]
         lastSMA51 = sma51[-1]
@@ -162,23 +162,16 @@ def checkB1(ohlcv: List[OHLCV], targetDate) -> bool:
         if lastBB and lastSMA51:
             deviation = (last.close - lastSMA51) / lastSMA51
             logger.info(f"clode: {last.close} lastSMA51: {lastSMA51}")
-            condBoll = last.close > lastBB['upper'] and deviation < 0.25
+            condBB = last.close > lastBB['upper'] and deviation < 0.25
 
     condCloseInUpperRange = last.close > last.low + 0.65 * (last.high - last.low)
-
-    logger.info(f"B1 Conditions - NewHigh: {condNewHigh}, last: {last.high} prev20High: {prev20High}  Bollinger: {condBoll}, CloseInUpperRange: {condCloseInUpperRange}")
-
-    return condNewHigh or condBoll
-
-def checkB1_1(ohlcv: List[OHLCV])-> bool:
-    if len(ohlcv) < 51:
-        return False
-
-    last = ohlcv[-1]
     
-    condCloseInUpperRange = last.close > last.low + 0.65 * (last.high - last.low)
-    
-    return condCloseInUpperRange
+    logger.info(f"last.low: {last.low}, last_h: {last.high} last.close: {last.close}")
+
+
+    logger.info(f"B1 Conditions - NewHigh: {condNew20DHigh}, last: {last.high} prev20High: {prev20High}  Bollinger: {condBB}, CloseInUpperRange: {condCloseInUpperRange}")
+
+    return ((condNew20DHigh or condBB) and condCloseInUpperRange)
 
 #TODO B3 ++
 def linear_reg_value_mc(series: List[float], length: int, tgt_bar: int) -> float:
@@ -260,9 +253,9 @@ def checkB8(ohlcv: List[OHLCV]) -> bool:
     recent46Low = min(lows[-46:])
 
     pastRange = lows[-270:-47]
-    pastMin = min(pastRange)
+    pastMinRange = min(pastRange)
 
-    return recent46Low > pastMin
+    return recent46Low > pastMinRange
 
 #TODO B9 ++
 def checkB9(ohlcv: List[OHLCV]) -> bool:
@@ -300,14 +293,12 @@ def checkB10(ohlcv: List[OHLCV]) -> bool:
     minLow = min(lows)
     minIndex = lows.index(minLow)
 
-    # minIndex = max(
-    #     i for i, v in enumerate(lows) if v == minLow
-    # )
+    return minLow not in lows[-68:]
 
 
-    daysSinceLow = len(last250) - 1 - minIndex
+    # daysSinceLow = len(last250) - 1 - minIndex
 
-    return daysSinceLow > 68
+    # return daysSinceLow > 68
 
 #TODO B11 ++
 def checkB11(ohlcv: List[OHLCV]) -> bool:
@@ -356,8 +347,7 @@ def checkB12(
     sma_growth = (sma_now / sma_past) - 1.0
     deviation = (ohlcv[-1].high / sma_now) - 1.0
 
-    cancel = (sma_growth > input_B12_growth) and (deviation > input_B12_deviation)
-    return not cancel
+    return not ((sma_growth > input_B12_growth) and (deviation > input_B12_deviation))
 
 #TODO B13 ++
 def checkB13(
@@ -402,6 +392,8 @@ def checkB18(ohlcv: List[OHLCV], targetDate: str) -> bool:
     if not ohlcv or len(ohlcv) < 250:
         logger.info(f"Insufficient data for {targetDate}. Length of ohlcv: {len(ohlcv)}")
         return False
+    
+    
 
     closes = [bar.close for bar in ohlcv]
     highs = [bar.high for bar in ohlcv]
@@ -521,7 +513,6 @@ def calcS1Stop(ohlcv: List[OHLCV], factor: float = 3.7, atrPeriod: int = 22,
 def runAllBuyConditions(ohlcv: List[OHLCV], targetDate: str, spyData: List[OHLCV]) -> Dict[str, Union[bool, float]]:
     return {
         'B1':  checkB1(ohlcv, targetDate),
-        'B1_1': checkB1_1(ohlcv),
         'B3':  checkB3(ohlcv),
         'B8':  checkB8(ohlcv),
         'B9':  checkB9(ohlcv),
@@ -534,6 +525,9 @@ def runAllBuyConditions(ohlcv: List[OHLCV], targetDate: str, spyData: List[OHLCV
     }
 
 def isBuy(signals: Dict[str, Union[bool, float]]) -> bool:
-    return bool((signals['B1'] and signals['B1_1'] and signals['B3'] and signals['B8'] and 
+    return bool((signals['B1'] and signals['B3'] and signals['B8'] and 
             signals['B9'] and signals['B10'] and signals['B11'] and 
             signals['B12'] and signals['B13']) or signals['B18'])
+
+
+# 1,0,1,1,1,0,1,1,0,1,0,0,1,1,1,0,0,
