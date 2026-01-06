@@ -1,0 +1,871 @@
+// HK Algo
+[IntrabarOrderGeneration = false]
+
+vars:
+	write_signal_log(true),
+	write_cash_log(false),
+	all_date(false);
+
+Inputs:
+	input_new_high(20),
+	input_new_high_close(0.65),
+	input_BBW_SMA_X1(90),
+	input_BBW_len(21),
+	input_BBW_SD(2),
+	input_LR_SMA_BBW_len(50),
+	input_slope_len(66),
+	input_day_low_loss_percentage(0.2),
+	input_exit_slow(70),
+	input_exit_fast(5),
+	input_exit_LRL_SLOPE_len(123),
+	input_exit_LRL_effective_day(42),
+	input_BBW_cross_threshold(160),
+	input_BBW_ma_threshold(45),
+	input_higher_low_len(270),
+	input_higher_low_threshold(46),
+	input_hl_range(50),
+	input_exit_S2_effective_day(40),
+	input_exit_adj_stop_percent(9.5),
+	input_exit_barsinceentry(50),
+	input_exit_barsinceentry_threshold(50),
+	input_exit_barsinceentry_gain(5),
+	input_exit_moving_stop_day(45),
+	input_exit_moving_stop_period(25),
+	input_exit_moving_stop_factor(0.62),
+	input_exit_new_high_day(76),
+	input_exit_new_high_len(90),
+	input_XXXD_low_day(68),
+	input_day_low_stop(22),
+		
+	input_exit_S1_ATR_len(22),
+	input_exit_S1_factor(3.7),
+	input_highest_ATR_YY_day(126),
+	input_highest_ATR_XX_percent(87),
+	input_exit_candle_factor(2),
+	input_exit_candle_day(0),
+	input_energy_xx(16),
+	input_energy_yy(0.22),
+	input_exit_S8_factor(2.4),
+	input_exit_S8_XX_percent(74),
+	input_exit_S8_ATR(100),
+	
+	input_exit_S10_X(5),
+	input_exit_S10_Y(2.6),
+	
+	input_B12_X(16),
+	input_B12_Y(50),
+	
+	input_deferred_day(0),
+	
+	input_S11_XX_day(300),
+	input_S11_YY_day(2),
+
+	input_S12_XX_day(240),
+	input_S12_YY_day(22),
+
+	input_S13_XX_day(238),
+	input_S13_YY_day(80),
+	
+	input_B13_XX(19),
+	input_B13_YY(60),
+	
+	input_S14_XX(35),
+	input_S14_YY(300),
+
+	input_S15_XX(25),
+	input_S15_YY(4),
+
+	input_S16_XX(15),
+	input_S16_YY(10),
+	input_S16_effective(0),
+	input_S16_ATR_INC(50),
+	input_S16_ATR_day(12),
+	
+	input_S17_XX(150),
+	input_S17_YY(60),
+
+	input_S18_lowest_len(250),
+	input_S18_RSI_lookback(50),
+	input_S18_RSI_len(14),
+	input_S18_RSI_upper(70),
+	input_S18_fib(0.618),
+	
+	input_B14_X(0),
+	input_B14_Y(0),
+	
+	input_B15_X(0),
+	
+	input_B16_X(0),
+	input_B16_Y(0),
+	input_B16_A(0),
+	input_B16_B(0),
+	
+	input_B17_X(0),
+	input_B17_Y(0),
+	input_B17_A(0),
+	input_B17_B(0),
+	
+	input_B1_X(0),
+	input_B1_Y(0),
+	input_B1_Z(0),
+	input_B1_W(0),
+	
+	input_B18_X(0),
+	input_B18_Y(0),
+	input_B18_Z(0);
+	
+		
+vars:
+
+	cond01a_NewHigh(false),
+	cond01b_ClosevsHighLow(false),
+	cond05_1_LR_BBW(false),
+	cond06_SLOPE(false),
+	cond10_higher_low(false),
+	cond13_hl_range(false),
+	cond15_XXXD_low(false),
+	cond_B18(false),
+		
+	cond01c_bb(false),
+	cond01d_NewclosingHigh(false),
+	
+	cond17_highest_ATR(false),
+	
+	cond18_B12(false),
+	
+	cond19_B13(false),
+	
+	stop_prev_low(0),
+	avgOBV(0),
+	BBW(0),
+	SLOPE(0),
+	SLOPE1(0),
+	SLOPE2(0),
+	SLOPE3(0),
+	LR(0),
+	var1(0),
+	var2(0),
+	sma_var1(0),
+	sma_var2(0),
+
+	E1(0),
+	E2(0),
+	E3(0),
+	E4(0),
+	E5(0),
+	Energy(0),
+	output_str(""),
+	next_open_action(""),
+	is_stop_day_low(false),
+	is_stop_retrace(false),
+	is_stop_barsinceentry(false),
+	is_stop_moving(false),
+	is_stop_new_high_day(false),
+	
+	is_stop_candle(false),
+	is_stop_energy(false),
+	
+	is_stop_S8(false),
+	S8_dark_cnt(0),
+
+	is_stop_S10(false),
+	is_stop_S11(false),
+	is_stop_S12(false),
+	is_stop_S13(false),
+	is_stop_S14(false),
+	is_stop_S15(false),
+	is_stop_S16(false),
+	is_stop_S17(false),
+	is_stop_S18(false),
+	
+	BBW_cross1(0),
+	BBW_cross2(0),
+	BBW_ma(0),
+	
+	BBW01(0),
+	BBW02(0),
+	
+	start_tradeday(0),
+	remained_cash(9999999999),
+	remained_cash_str(""),
+	
+	fivebar_cnt(0),
+	day_cnt(0),
+	
+	profitable_cnt(0),
+	
+	moving_stop_day_cnt(0),
+	moving_stop(0),
+	
+	other_stop(0),
+	
+	above_ma_cnt(0),
+	
+	ListC_ID(0),
+	ListDate_ID(0),
+	in_date(0),
+	
+	ListStock_ID(0),
+	in_stock(""),
+	adj_stock(""),
+	isEnd(false),
+	
+	line_cnt(0),
+	
+	B18_BB(0), B18_BBW(0), B18_BBW_SMA(0),
+	
+	//deferred buy
+	g_buy_cnt(0),
+	
+	stockname("");
+
+Array:	
+	arr_adj_stock[]("");
+
+
+//init vars
+next_open_action = "N";
+vars: S16_atr(0);
+S16_atr = _lewis_ATR(22);
+
+stockname = midstr(symbolname, 6, 10);
+
+
+once begin
+	ListC_ID = ListC.new;
+	Value1 = ListC.ReadFile(ListC_ID, "C:\Screener\HKEX_input_date.txt");
+	ListDate_ID = ListC.Get(ListC_ID, 1);
+	in_date = ListN.get(ListDate_ID, 1);
+	start_tradeday = in_date;
+	ListC.Clear(ListC_ID);
+
+	Value1 = ListC.ReadFile(ListC_ID, "C:\Screener\HKEX_input_adj_stock.txt");
+	ListStock_ID = ListC.Get(ListC_ID, 1);
+	in_stock = ListS.get(ListStock_ID, 1);
+	adj_stock = in_stock;
+	ListC.Clear(ListC_ID);
+	
+	value1 = 1;
+	while not isEnd
+	begin
+		value2 = instr(adj_stock, ";");
+		if value2 > 0 then
+		begin
+			if value2 = strlen(adj_stock) then isEnd = true;
+			
+			Array_SetMaxIndex(arr_adj_stock, value1);
+			arr_adj_stock[value1] = midstr(adj_stock, 1, value2-1);
+			adj_stock = midstr(adj_stock, value2+1, 99999);
+			
+			value1 = value1 + 1;
+			
+			if value1 = 999 then isEnd = true;
+		end
+		else
+		begin
+			isEnd = true;
+		end;
+	end;
+
+	if write_cash_log then
+		FileDelete("C:\Screener\HKEX_check_cash.csv");
+end;
+
+
+//deferred buy
+if g_buy_cnt = 0 then
+begin
+
+
+	//B1
+	//1. new high
+	if high > highest(high, input_new_high)[1] then
+	begin
+		cond01a_NewHigh = true;
+	end
+	else
+	begin
+		cond01a_NewHigh = false;
+	end;
+	
+	//print("b1 passed", BarNumber);
+
+	//1. close > X/Y bar
+	if close > (high - low) * input_new_high_close + low then
+	begin
+		cond01b_ClosevsHighLow = true;
+	end
+	else
+	begin
+		cond01b_ClosevsHighLow = false;
+	end;
+
+	//CLOSE ABOVE Bollinger Band (51, 1.9) but not deviating from 51MA by 25%
+	if close > BollingerBand(close, input_B1_Y, input_B1_X) and (close / average(close, input_B1_Y) - 1) * 100 < input_B1_Z then
+		cond01c_bb = true
+	else
+		cond01c_bb = false;
+
+	//hits XX day closing high
+	if close > highest(close, input_B1_W)[1] then
+	begin
+		cond01d_NewclosingHigh = true;
+	end
+	else
+	begin
+		cond01d_NewclosingHigh = false;
+	end;
+	cond01d_NewclosingHigh = false;
+
+
+	//B3
+	//5.1 SLOPE of LR(BBW)
+	
+	//BBW = BBW(Close, {21}, {2}), SMA_BBW = SMA(BBW, {XX}), Slope of LR(SMA_BBW), {YY}) < 0
+	BBW01 = BollingerBand(close, input_BBW_len, 0);
+	if BBW01 <> 0 then
+	begin
+		BBW = (BollingerBand(close, input_BBW_len, input_BBW_SD) - BollingerBand(close, input_BBW_len, input_BBW_SD*-1))/BBW01*100;
+		sma_var1 = average(BBW, input_BBW_SMA_X1);
+
+		var1 = LinearRegValue(sma_var1, input_LR_SMA_BBW_len, 0);
+		var2 = LinearRegValue(sma_var1, input_LR_SMA_BBW_len, input_LR_SMA_BBW_len - 1);
+		SLOPE1 = (var1 - var2) / input_LR_SMA_BBW_len;
+
+		if SLOPE1 < 0 then
+		begin
+			cond05_1_LR_BBW = true;
+		end
+		else
+		begin
+			cond05_1_LR_BBW = false;
+		end;
+	end
+	else
+	begin
+		cond05_1_LR_BBW = false;
+	end;
+	
+	//6. SLOPE <-- not a buy condition, just for energy level
+	SLOPE = (close - close[input_slope_len])/input_slope_len;
+	if SLOPE > 0 then
+	begin
+		cond06_SLOPE = true;
+	end
+	else
+	begin
+		cond06_SLOPE = false;
+	end;
+
+
+	//B8
+	//10. 23D low > T-24 to T-123D low
+	if lowestbar(low, input_higher_low_len) > input_higher_low_threshold then
+	begin
+		cond10_higher_low = true;
+	end
+	else
+	begin
+		cond10_higher_low = false;
+	end;
+	
+
+	//B9
+	//X. CANCEL Buy if Close < (Last 100D High + Last 100D Low) /2
+	if close < (highest(high, input_hl_range) + lowest(low, input_hl_range)) / 2
+		and highestbar(high, input_hl_range) > lowestbar(low, input_hl_range) then
+	begin
+		cond13_hl_range = false;
+	end
+	else
+	begin
+		cond13_hl_range = true;
+	end;
+
+	//B10
+	//if 250D low happens within XXX days before breakout, cancel buy
+	if lowestbar(low, 250) < input_XXXD_low_day then
+		cond15_XXXD_low = false
+	else
+		cond15_XXXD_low = true;
+
+	//B11
+	if _lewis_ATR(22) > highest(_lewis_ATR(22), input_highest_ATR_YY_day)[1] * input_highest_ATR_XX_percent/100 then
+		cond17_highest_ATR = false
+	else
+		cond17_highest_ATR = true;
+
+	//B12
+	if average(close,150)/average(close,150)[input_B12_Y]-1 > input_B12_X/100 and high/average(close, 150)-1 > 20/100 then
+		cond18_B12 = false
+	else
+		cond18_B12 = true;
+
+	//energy level
+	E1 = iff(cond01a_NewHigh and cond01b_ClosevsHighLow, 1, 0);
+	E2 = iff(_lewis_StochRSI(10) > 0.5, 1, 0);
+	E3 = iff(cond06_SLOPE, 1, 0);
+	E4 = iff(close[33]=0, 0, iff(close/close[33] > close data(2)/close[33] data(2), 1, 0));
+	E5 = iff(highest(high, 5) - lowest(low, 5) = 0, 0, iff((close - lowest(low, 5))/(highest(high, 5) - lowest(low, 5)) > 0.5 and close - close[5] > 0 and (highest(high, 250) - close)/highest(high, 250) < 0.07, 1, 0));
+	Energy = E1+E2+E3+E4+E5;
+
+
+	//B13
+	if close/close[input_B13_XX] < close data(2)/close[input_B13_XX] data(2) and
+		close/close[input_B13_YY] < close data(2)/close[input_B13_YY] data(2) then
+		cond19_B13 = false
+	else
+		cond19_B13 = true;
+
+
+	// B18 MMT start
+
+	//1. The current stock price is above both the 150-day (30-week) and the 200-day (40-week) moving average price lines.
+	condition1 = close > average(close, 150) and close > average(close, 200);
+	
+	//2. The 150-day moving average is above the 200-day moving average.
+	condition2 = average(close, 150) > average(close, 200);
+	
+	//3. The 200-day moving average line is trending up for at least 1 month (preferably 4-5 months minimum in most cases).
+	condition3 = average(close, 200) > average(close, 200)[20];
+	
+	//4. The 50-day (10-week) moving average is above both the 150-day and 200-day moving averages.
+	condition4 = average(close, 50) > average(close, 150) and average(close, 50) > average(close, 200);
+	
+	//5. The current stock price is trading above the 50-day moving average.
+	condition5 = close > average(close, 50);
+	
+	//print("b18 cond5 passed", BarNumber, ",", date);
+	//print(lowest(low, 250), ",", close);
+
+	//6. The current stock price is at least 30 percent above its 52-week low.
+	condition6 = (close - lowest(low, 250)) / lowest(low, 250) * 100 >= 30;
+	
+	//print("b18 cond6 passed", BarNumber);
+	
+	//7. The current stock price is within at least 25 percent of its 52-week high (the closer to a new high the better).
+	condition7 = (highest(high, 250) - close) / highest(high, 250) * 100 <= 25;
+	
+	//8. Average BBW in the past 20 days is small than X% of BBW in the past Y days
+	B18_BB = BollingerBand(close, input_BBW_len, 0);
+	if B18_BB <> 0 then
+	begin
+		B18_BBW = (BollingerBand(close, input_BBW_len, input_BBW_SD) - BollingerBand(close, input_BBW_len, input_BBW_SD*-1))/B18_BB*100;
+		B18_BBW_SMA = average(B18_BBW, input_B18_Z);
+		
+		condition8 = B18_BBW_SMA < B18_BBW[input_B18_Y] * input_B18_X / 100 and close > BollingerBand(close, input_B18_Z, 2);
+	end
+	else
+	begin
+		condition8 = false;
+	end;
+		
+
+	if condition1 and condition2 and condition3 and condition4 and
+	   condition5 and condition6 and condition7 and condition8 then
+		cond_B18 = true
+	else
+		cond_B18 = false;
+
+	// MMT end
+	
+end;
+
+
+////////////////////////////////////////////////////////////////////
+if MarketPosition = 0 then
+begin
+
+	if ((cond01a_NewHigh or cond01c_bb or cond01d_NewclosingHigh)
+	and cond01b_ClosevsHighLow
+	and cond05_1_LR_BBW
+	and cond10_higher_low
+	and cond13_hl_range
+	and cond15_XXXD_low
+	and cond17_highest_ATR
+	and cond18_B12
+	and cond19_B13
+	) or
+	g_buy_cnt > 0 //deferred buy
+	or cond_B18
+	then
+	begin
+	
+		if write_cash_log then
+		begin
+			if InitialCapital + portfolio_netprofit - Portfolio_InvestedCapital < remained_cash then
+				remained_cash = InitialCapital + portfolio_netprofit - Portfolio_InvestedCapital;
+			
+			if remained_cash < 0 then
+				remained_cash_str = remained_cash_str + "XXX OUT OF CASH XXX," + NumToStr(remained_cash,0) + "," + NumToStr(currentdate,0) + "," + NumToStr(currenttime,0) + "," + NumToStr(date,0) + "," + stockname + newline;
+		end;
+		
+		//deferred buy
+		if g_buy_cnt = input_deferred_day then
+		begin
+			Buy ("buy_green") next bar market;
+			
+			//S1
+			stop_prev_low = close - input_exit_S1_factor * _lewis_ATR(input_exit_S1_ATR_len);
+			if (close - stop_prev_low) / close > 0.3 then
+			begin
+				stop_prev_low = close * (1 - 1.5*input_exit_adj_stop_percent/100);
+			end
+			else if (close - stop_prev_low) / close > input_day_low_loss_percentage then
+			begin
+				stop_prev_low = close * (1 - input_exit_adj_stop_percent/100);
+			end;
+			
+			moving_stop = 0;
+			moving_stop_day_cnt = 0;
+			profitable_cnt = 0;
+			other_stop = 0;
+			
+			next_open_action = "B";
+
+			g_buy_cnt = 0;
+		end
+		else
+		begin
+			g_buy_cnt = g_buy_cnt + 1;
+		end;
+				
+	end;
+end
+else
+begin
+	
+	//S1
+	//X-day low stop
+	if close < stop_prev_low then
+		is_stop_day_low = true
+	else
+		is_stop_day_low = false;
+		
+	
+	//S4
+	//Enable this rule on the [P1=20]th trading day after issuing Buy.
+	//Let A = counting number of trading day whereas Daily Close > Buy price (ie profitable days)
+	//If A/P1 < P2 then exit trade
+	if close > average(close, 150) then profitable_cnt = profitable_cnt + 1;
+	if barssinceentry(0) >= input_exit_barsinceentry then
+	begin
+		if profitable_cnt/input_exit_barsinceentry * 100 < input_exit_barsinceentry_threshold
+			and (close - entryprice(0)) / entryprice(0) * 100 < input_exit_barsinceentry_gain then
+			is_stop_barsinceentry = true
+		else
+			is_stop_barsinceentry = false;
+	end
+	else
+	begin
+		is_stop_barsinceentry = false;
+	end;
+	
+	//S5
+	//moving stop
+	if barssinceentry(0) >= input_exit_moving_stop_day then
+	begin
+		moving_stop_day_cnt = moving_stop_day_cnt + 1;
+
+		if moving_stop = 0 then
+			moving_stop = OpenEntryPrice + input_exit_moving_stop_factor * _lewis_ATR(20);
+
+		if mod(moving_stop_day_cnt, input_exit_moving_stop_period) = 0 then
+		begin
+			moving_stop = moving_stop + input_exit_moving_stop_factor * _lewis_ATR(20);
+		end;
+	end;
+	if close < moving_stop then
+		is_stop_moving = true
+	else
+		is_stop_moving = false;
+	
+	//S6
+	//if no new 100D high in the last XX days, then stop
+	is_stop_new_high_day = false;
+	if barssinceentry(0) >= 50 then
+	begin
+		if highestbar(close, input_exit_new_high_len) > input_exit_new_high_day then
+			is_stop_new_high_day = true
+		else
+			is_stop_new_high_day = false;
+	end;
+	
+	//S7
+	is_stop_candle = false;
+	if barssinceentry(0) > input_exit_candle_day then
+	begin
+		if countif(close < open and (open - close) > input_exit_candle_factor * _lewis_ATR(22), 2) >= 2 then
+		begin
+			is_stop_candle = true;
+		end
+		else
+			is_stop_candle = false;
+
+	end;
+	
+	//S8
+	is_stop_S8 = false;
+	S8_dark_cnt = 0;
+	if barssinceentry(0) > 0 then
+	begin
+		if _lewis_ATR(input_exit_S8_ATR) > highest(_lewis_ATR(22), 126)[1] * input_exit_S8_XX_percent/100 then
+		begin
+			for value1 = 0 to 4
+			begin
+				if close[value1] < open[value1] and (open[value1] - close[value1]) > input_exit_S8_factor * _lewis_ATR(input_exit_S8_ATR)[value1] then S8_dark_cnt = S8_dark_cnt + 1;
+				if S8_dark_cnt >= 3 then
+				begin
+					is_stop_S8 = true;
+					break;
+				end;
+			end;
+		end
+		else
+		begin
+			is_stop_S8 = false;
+		end;
+	end;
+
+	//S9
+	//energy level exit
+	if average(Energy, input_energy_xx) < input_energy_yy then
+		is_stop_energy = True
+	else
+		is_stop_energy = false;
+	
+
+	//S10
+	if _lewis_ATR(10) > input_exit_S10_Y * _lewis_ATR(100) and
+		(highest(high,90)[1] - close) / highest(high,90)[1] * 100 > input_exit_S10_X then
+		is_stop_S10 = True
+	else
+		is_stop_S10 = false;
+	
+	//S11 fibo 0.382
+	is_stop_S11 = false;
+	if barssinceentry(0) > input_S11_XX_day then
+	begin
+		if countif((highest(high, 250) - close)/(highest(high, 250) - lowest(low, 250)) > 0.382, input_S11_YY_day) = input_S11_YY_day then
+			is_stop_S11 = True
+		else
+			is_stop_S11 = false;
+	end;
+
+	//S12 fibo 0.236
+	is_stop_S12 = false;
+	if barssinceentry(0) > input_S12_XX_day then
+	begin
+		if countif((highest(high, 250) - close)/(highest(high, 250) - lowest(low, 250)) > 0.236, input_S12_YY_day) = input_S12_YY_day then
+			is_stop_S12 = True
+		else
+			is_stop_S12 = false;
+	end;
+	
+	
+	//S13
+	is_stop_S13 = false;
+	if barssinceentry(0) > input_S13_XX_day then
+	begin
+	
+		if close < lowest(low, input_S13_YY_day)[1] then
+			is_stop_S13 = True
+		else
+			is_stop_S13 = false;
+	end;
+	
+
+	//S14
+	is_stop_S14 = false;
+	if barssinceentry(0) > input_S14_YY then
+	begin
+		if close / close[input_S14_XX] < close data(2) / close[input_S14_XX] data(2) and
+			close / close[input_S14_XX*2] < close data(2) / close[input_S14_XX*2] data(2) and
+			close / close[input_S14_XX*3] < close data(2) / close[input_S14_XX*3] data(2) then
+				is_stop_S14 = true;
+	end;
+	
+
+	//S15
+	//show S15 as stop position on chart if it is a higher stop
+	//if close[input_S15_YY]-(input_S15_XX*close[input_S15_YY]/100) > maxlist(stop_prev_low, moving_stop, other_stop) then
+	//	other_stop = close[input_S15_YY]-(input_S15_XX*close[input_S15_YY]/100);
+	
+	if (close[input_S15_YY] - close)/close[input_S15_YY]*100 > input_S15_XX then
+		is_stop_S15 = true
+	else
+		is_stop_S15 = false;
+	
+		
+	//S16
+	is_stop_S16 = false;
+	if barssinceentry(0) > input_S16_effective then
+	begin
+		if S16_atr[input_S16_ATR_day] > 0 then
+		begin
+			if (S16_atr/S16_atr[input_S16_ATR_day] - 1)*100 > input_S16_ATR_INC and
+			(close[input_S16_YY] - close)/close[input_S16_YY]*100 > input_S16_XX then
+				is_stop_S16 = true
+			else
+				is_stop_S16 = false;
+		end;
+	end;
+	
+	
+	//S17
+	is_stop_S17 = false;
+	if barssinceentry(0) > input_S17_XX then
+	begin
+		if (highest(high, input_S17_XX) / lowest(low, input_S17_XX) - 1) * 100 > input_S17_YY then
+		begin
+			if (close / lowest(low, input_S17_XX) - 1) * 100 < input_S17_YY / 2 then
+				is_stop_S17 = true;
+		end;
+	end;
+
+	
+{========== end of stop signals ==========}	
+	
+	if is_stop_day_low then
+	begin
+		Sell ("stop_day_low") next bar at market;
+		next_open_action = "S";
+	end
+	else if is_stop_barsinceentry then
+	begin
+		Sell ("stop_barsinceentry") next bar at market;
+		next_open_action = "S";
+	end
+	else if is_stop_moving then
+	begin
+		Sell ("stop_moving") next bar at market;
+		next_open_action = "S";
+	end
+	else if is_stop_new_high_day then
+	begin
+		Sell ("stop_new_high_day") next bar at market;
+		next_open_action = "S";
+	end
+	else if is_stop_candle then
+	begin
+		Sell ("stop_candle") next bar at market;
+		next_open_action = "S";
+	end
+	else if is_stop_energy then
+	begin
+		Sell ("stop_energy") next bar at market;
+		next_open_action = "S";
+	end
+	else if is_stop_S8 then
+	begin
+		Sell ("stop_S8") next bar at market;
+		next_open_action = "S";
+	end
+	else if is_stop_S10 then
+	begin
+		Sell ("stop_S10") next bar at market;
+		next_open_action = "S";
+	end
+	else if is_stop_S11 then
+	begin
+		Sell ("stop_S11") next bar at market;
+		next_open_action = "S";
+	end
+	else if is_stop_S12 then
+	begin
+		Sell ("stop_S12") next bar at market;
+		next_open_action = "S";
+	end
+	else if is_stop_S13 then
+	begin
+		Sell ("stop_S13") next bar at market;
+		next_open_action = "S";
+	end
+	else if is_stop_S14 then
+	begin
+		Sell ("stop_S14") next bar at market;
+		next_open_action = "S";
+	end
+	else if is_stop_S15 then
+	begin
+		Sell ("stop_S15") next bar at market;
+		next_open_action = "S";
+	end
+	else if is_stop_S16 then
+	begin
+		Sell ("stop_S16") next bar at market;
+		next_open_action = "S";
+	end
+	else if is_stop_S17 then
+	begin
+		Sell ("stop_S17") next bar at market;
+		next_open_action = "S";
+	end
+	else if is_stop_S18 then
+	begin
+		Sell ("stop_S18") next bar at market;
+		next_open_action = "S";
+	end;
+
+end;
+
+if write_signal_log and (all_date or date >= start_tradeday or Array_Contains(arr_adj_stock, stockname)) then
+begin
+	
+	output_str = output_str + numtostr(barnumber,0) + ",";
+	output_str = output_str + numtostr(date,0) + ",";
+	output_str = output_str + stockname + ",";
+	output_str = output_str + iffs(marketposition=0, "F", "I") + ",";
+	output_str = output_str + next_open_action + ",";
+		
+	if true then
+	begin
+		output_str = output_str + iffs(cond01a_NewHigh and cond01b_ClosevsHighLow, "1", "0") + ",";
+		output_str = output_str + iffs(_lewis_StochRSI(10) > 0.5, "1", "0") + ",";
+		output_str = output_str + iffs(cond06_SLOPE, "1", "0") + ",";
+		output_str = output_str + iffs(close[33]=0, "0", iffs(close/close[33] > close data(2)/close[33] data(2), "1", "0")) + ",";
+		output_str = output_str + iffs(highest(high, 5) - lowest(low, 5) = 0, "0", iffs((close - lowest(low, 5))/(highest(high, 5) - lowest(low, 5)) > 0.5 and close - close[5] > 0 and (highest(high, 250) - close)/highest(high, 250) < 0.07, "1", "0")) + ",";
+	end
+	else
+	begin
+		output_str = output_str + "0,0,0,0,0,";
+	end;
+
+	//Exit: 20D stop loss
+	output_str = output_str + iffs(marketposition>0 or next_open_action = "B", numtostr(maxlist(stop_prev_low, moving_stop, other_stop), 3), "0") + ",";
+		
+	
+	//close
+	output_str = output_str + numtostr(close,3) + ",";
+	
+	//buy price
+	output_str = output_str + iffs(marketposition>0, numtostr(entryprice(0),3), "0") + ",";
+	
+	//sell price
+	output_str = output_str + iffs(marketposition=0, numtostr(exitprice(1),3), "0") + ",";
+	
+	//today open action
+	output_str = output_str + iffs(marketposition=0 and exitdate(1)=date, "S", iffs(marketposition>0 and entrydate(0)=date, "B", "N")) + ",";
+		
+	
+	//cap
+	output_str = output_str + "0,";
+	
+	//Portfolio_CurrentEntries
+	output_str = output_str + "0" + newline;
+	
+	if LastBarOnChart then
+	begin
+		fileappend("C:\Screener\signal_hkex_01_interface_work.csv", output_str);
+		output_str = "";
+	end;
+end;
+
+if LastBarOnChart then
+begin
+	if write_cash_log then
+	begin
+		remained_cash_str = remained_cash_str + "END," + NumToStr(remained_cash,0) + "," + NumToStr(currentdate,0) + "," + NumToStr(currenttime,0) + "," + NumToStr(date,0) + "," + stockname + newline;
+		fileappend("C:\Screener\HKEX_check_cash.csv", remained_cash_str);
+	end;
+end;

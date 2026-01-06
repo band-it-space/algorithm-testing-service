@@ -1,282 +1,343 @@
 # Algorithm Testing Service
 
-A distributed service for testing algorithms with a queue-based architecture and worker system, specifically designed for processing Hong Kong stock market data.
+A comprehensive Python-based trading algorithm testing and execution service with support for multiple trading signals, backtesting capabilities, and real-time monitoring.
 
-## Architecture
+## Table of Contents
 
-```
-API Request → Queue 1 (algorithm_calculation) → Worker 1 → Queue 2 (result_processing) → Worker 2
-```
+-   [Overview](#overview)
+-   [Features](#features)
+-   [Project Structure](#project-structure)
+-   [Prerequisites](#prerequisites)
+-   [Installation](#installation)
+-   [Configuration](#configuration)
+-   [Usage](#usage)
+-   [API Endpoints](#api-endpoints)
+-   [Workers](#workers)
+-   [Testing](#testing)
+-   [Docker Deployment](#docker-deployment)
+-   [Contributing](#contributing)
 
-The service implements a two-stage processing pipeline:
+## Overview
 
-1. **Algorithm Calculation Queue**: Processes individual stock codes from HKEX
-2. **Result Processing Queue**: Performs final calculations and result aggregation
-
-## Components
-
--   **FastAPI** - REST API server
--   **Redis** - Queue system and caching
--   **RQ (Redis Queue)** - Background job processing workers
--   **Docker** - Containerization
--   **RQ Dashboard** - Web interface for queue monitoring
--   **Pandas & OpenPyXL** - Data processing for stock market data
+The Algorithm Testing Service is designed to test, validate, and execute trading algorithms in a distributed environment. It supports multiple buy/sell signals, risk management rules, and provides comprehensive logging and monitoring capabilities.
 
 ## Features
 
--   **Stock Data Integration**: Automatically fetches and processes Hong Kong stock codes from HKEX
--   **Distributed Processing**: Two-stage queue system for scalable algorithm testing
--   **Real-time Monitoring**: Comprehensive monitoring endpoints and web dashboard
--   **Docker Support**: Full containerization with health checks
--   **Logging**: Structured logging with configurable levels
--   **Error Handling**: Robust error handling and retry mechanisms
-
-## Quick Start
-
-### Using Docker Compose (Recommended)
-
-```bash
-docker-compose up --build
-```
-
-This will start:
-
--   Redis server
--   FastAPI application
--   Algorithm worker
--   Result processing worker
--   RQ Dashboard
-
-### Local Development
-
-1. Install Redis locally
-2. Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-3. Start the API server:
-
-```bash
-uvicorn app.main:app --reload
-```
-
-4. Start workers (in separate terminals):
-
-```bash
-python workers/start_algorithm_worker.py
-python workers/start_result_worker.py
-```
-
-## API Endpoints
-
-### Core Endpoints
-
--   `GET /` - Service status
--   `GET /health` - Health check
--   `GET /api/v1/start-testing/` - Initialize algorithm testing (fetches stock codes and queues them)
-
-### Monitoring Endpoints
-
--   `GET /api/v1/monitoring/queues` - Detailed queue information
--   `GET /api/v1/monitoring/workers` - Worker status and statistics
--   `GET /api/v1/monitoring/jobs/{queue_name}` - Jobs in specific queue
--   `GET /api/v1/monitoring/stats` - Overall system statistics
-
-## Usage Examples
-
-### Initialize Algorithm Testing
-
-```bash
-curl -X GET "http://localhost:8000/api/v1/start-testing/"
-```
-
-This endpoint:
-
-1. Fetches current Hong Kong stock codes from HKEX
-2. Filters out excluded ranges (derivatives, bonds, etc.)
-3. Queues the first 3 stock codes for processing (configurable)
-
-### Monitor System Status
-
-```bash
-curl -X GET "http://localhost:8000/api/v1/monitoring/stats"
-```
-
-### Check Queue Status
-
-```bash
-curl -X GET "http://localhost:8000/api/v1/monitoring/queues"
-```
+-   **Multi-Signal Trading System**: Support for 18+ buy signals (B1-B18) and multiple exit strategies (S1-S18)
+-   **Queue-Based Processing**: Asynchronous task processing using a queue system
+-   **Real-Time Monitoring**: Dashboard and monitoring endpoints for trade tracking
+-   **Backtesting Framework**: Historical data testing capabilities
+-   **Data Management**: CSV-based data input/output with signal logging
+-   **Worker Architecture**: Distributed worker processes for algorithm execution and file processing
+-   **Docker Support**: Containerized deployment with docker-compose
+-   **Comprehensive Logging**: Signal logs, cash flow logs, and detailed trade records
 
 ## Project Structure
 
 ```
 algorithm-testing-service/
-├── app/
-│   ├── main.py                          # FastAPI application
-│   ├── controllers/                     # API controllers
-│   │   ├── algorithm_controller.py      # Algorithm testing endpoints
-│   │   └── monitoring_controller.py     # Monitoring endpoints
-│   ├── models/                          # Pydantic models
-│   │   └── algorithm_models.py          # Data models
-│   ├── services/                        # Business logic
-│   │   ├── get_all_stoccks.py          # Stock data fetching
-│   │   └── queue_service.py             # Queue management
-│   ├── config/                          # Configuration
-│   │   ├── logging_config.py           # Logging setup
-│   │   └── queue_config.py             # Queue configuration
-│   └── workers/                         # Background workers
-│       ├── algorithm_worker.py          # First-stage processing
-│       └── result_worker.py             # Second-stage processing
-├── workers/                             # Worker startup scripts
+├── app/                          # Main application package
+│   ├── controllers/             # API route handlers
+│   │   ├── algorithm_controller.py
+│   │   ├── data_test_controller.py
+│   │   └── monitoring_controller.py
+│   ├── models/                  # Data models
+│   │   └── algorithm_models.py
+│   ├── services/                # Business logic
+│   │   ├── file_service.py
+│   │   ├── get_all_stoccks.py
+│   │   └── queue_service.py
+│   ├── workers/                 # Background workers
+│   │   ├── algorithm_worker.py
+│   │   ├── file_write_worker.py
+│   │   ├── result_worker.py
+│   │   └── algo_func/           # Algorithm functions
+│   │       ├── buy_signals.py
+│   │       ├── sell_signals.py
+│   │       ├── get_code_energy.py
+│   │       └── get_db_data.py
+│   ├── config/                  # Configuration files
+│   │   ├── logging_config.py
+│   │   └── queue_config.py
+│   └── main.py                  # Application entry point
+├── workers/                      # Worker entry points
 │   ├── start_algorithm_worker.py
+│   ├── start_file_write_worker.py
 │   └── start_result_worker.py
-├── dashboard/                           # RQ Dashboard
+├── dashboard/                    # Dashboard application
 │   └── start_dashboard.py
-├── requirements.txt
-├── Dockerfile
-└── docker-compose.yml
+├── tests/                        # Test suite
+│   └── algo_func/               # Algorithm function tests
+├── data/                         # Data files (CSV)
+├── docs/                         # Documentation
+├── Dockerfile                    # Docker image configuration
+├── docker-compose.yml           # Docker compose orchestration
+└── requirements.txt             # Python dependencies
 ```
 
-## Data Sources
+## Prerequisites
 
-The service integrates with Hong Kong Exchanges and Clearing Limited (HKEX):
+-   Python 3.8 or higher
+-   Docker and Docker Compose (optional, for containerized deployment)
+-   Redis (for queue processing)
+-   pandas, numpy (for data processing)
 
--   **Source**: https://www.hkex.com.hk/eng/services/trading/securities/securitieslists/ListOfSecurities.xlsx
--   **Data Format**: Excel file with stock codes and trading information
--   **Processing**: Automatically filters out derivatives, bonds, and other non-equity securities
+## Installation
+
+### Local Installation
+
+1. **Clone the repository**
+
+    ```bash
+    git clone <repository-url>
+    cd algorithm-testing-service
+    ```
+
+2. **Create a virtual environment**
+
+    ```bash
+    python -m venv venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    ```
+
+3. **Install dependencies**
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+4. **Configure the application**
+    - Update `app/config/logging_config.py` for logging settings
+    - Update `app/config/queue_config.py` for queue settings
+
+### Docker Installation
+
+```bash
+docker-compose build
+docker-compose up
+```
 
 ## Configuration
 
+### Logging Configuration
+
+Edit `app/config/logging_config.py` to configure:
+
+-   Log level
+-   Log file paths
+-   Log format
+
+### Queue Configuration
+
+Edit `app/config/queue_config.py` to configure:
+
+-   Queue backend (Redis)
+-   Queue name and settings
+-   Worker concurrency
+
+### Algorithm Parameters
+
+Algorithm parameters are defined in the individual signal functions:
+
+-   **Buy Signals** (B1-B18): In `app/workers/algo_func/buy_signals.py`
+-   **Sell Signals** (S1-S18): In `app/workers/algo_func/sell_signals.py`
+
+Key parameters include:
+
+-   ATR periods and factors
+-   Moving average lengths
+-   Bollinger Band settings
+-   Entry and exit thresholds
+
+## Usage
+
+### Starting the Application
+
+```bash
+python app/main.py
+```
+
+### Starting Workers
+
+In separate terminals:
+
+```bash
+# Start algorithm worker
+python workers/start_algorithm_worker.py
+
+# Start file write worker
+python workers/start_file_write_worker.py
+
+# Start result worker
+python workers/start_result_worker.py
+```
+
+### Starting the Dashboard
+
+```bash
+python dashboard/start_dashboard.py
+```
+
+## API Endpoints
+
+### Algorithm Controller
+
+-   `POST /api/algorithm/run` - Run algorithm on specified data
+-   `GET /api/algorithm/status` - Get algorithm status
+-   `POST /api/algorithm/stop` - Stop running algorithm
+
+### Data Test Controller
+
+-   `POST /api/test/data` - Test data validation
+-   `GET /api/test/results` - Get test results
+-   `POST /api/test/backtest` - Run backtest on historical data
+
+### Monitoring Controller
+
+-   `GET /api/monitor/trades` - Get active trades
+-   `GET /api/monitor/performance` - Get performance metrics
+-   `GET /api/monitor/signals` - Get signal log
+-   `GET /api/monitor/health` - Service health status
+
+## Workers
+
+### Algorithm Worker
+
+Processes algorithm execution tasks from the queue:
+
+-   Evaluates buy/sell signals
+-   Manages trade entries and exits
+-   Calculates energy levels and indicators
+-   Logs signal activity
+
+### File Write Worker
+
+Handles file operations:
+
+-   Writing signal logs to CSV
+-   Writing cash flow records
+-   Managing data output files
+
+### Result Worker
+
+Processes and aggregates results:
+
+-   Compiles trade results
+-   Calculates performance metrics
+-   Generates reports
+
+## Testing
+
+Run the test suite:
+
+```bash
+# Run all tests
+python -m pytest tests/
+
+# Run specific test file
+python -m pytest tests/algo_func/test_buy_signals.py
+
+# Run with coverage
+python -m pytest --cov=app tests/
+```
+
+### Key Test Files
+
+-   `test_b1.py` - Buy signal B1 tests
+-   `test_b3.py` - Buy signal B3 tests
+-   `test_b8.py` - Buy signal B8 tests
+-   `test_sell_signals.py` - Exit signal tests
+-   `test_indicators.py` - Technical indicator tests
+-   `test_bb_and_bbw.py` - Bollinger Band tests
+
+## Docker Deployment
+
+### Build and Run
+
+```bash
+# Build images
+docker-compose build
+
+# Start services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
+```
+
 ### Environment Variables
 
-| Variable         | Default     | Description               |
-| ---------------- | ----------- | ------------------------- |
-| `REDIS_HOST`     | redis       | Redis server hostname     |
-| `REDIS_PORT`     | 6379        | Redis server port         |
-| `REDIS_PASSWORD` | -           | Redis password (optional) |
-| `API_PORT`       | 8000        | FastAPI server port       |
-| `DASHBOARD_PORT` | 9181        | RQ Dashboard port         |
-| `LOG_LEVEL`      | INFO        | Logging level             |
-| `ENVIRONMENT`    | development | Environment name          |
-| `DEBUG`          | true        | Debug mode                |
+Configure in `.env` file or in `docker-compose.yml`:
 
-### Worker Configuration
+-   `LOG_LEVEL` - Logging level (DEBUG, INFO, WARNING, ERROR)
+-   `QUEUE_HOST` - Redis host
+-   `QUEUE_PORT` - Redis port
+-   `WORKER_CONCURRENCY` - Number of worker processes
 
--   `ALGORITHM_WORKER_TIMEOUT` - Algorithm worker timeout (default: 300s)
--   `ALGORITHM_WORKER_MAX_RETRIES` - Max retries for algorithm worker (default: 3)
--   `RESULT_WORKER_TIMEOUT` - Result worker timeout (default: 300s)
--   `RESULT_WORKER_MAX_RETRIES` - Max retries for result worker (default: 3)
+## Signal System
 
-## Monitoring
+### Buy Signals (B1-B18)
 
-### Web Interfaces
+| Signal | Description                           |
+| ------ | ------------------------------------- |
+| B1     | New high with closing price condition |
+| B3     | Bollinger Band width slope            |
+| B8     | Higher lows pattern                   |
+| B9     | Price above mid-range condition       |
+| B10    | Recent 250-day low check              |
+| B11    | ATR not at highest level              |
+| B12    | 150-day moving average growth         |
+| B13    | Comparative price performance         |
+| B18    | Market Trend Template (MMT)           |
 
--   **API Documentation**: http://localhost:8000/docs
--   **RQ Dashboard**: http://localhost:9181 - Queue monitoring interface
--   **Redis**: localhost:6379
+### Exit/Stop Signals (S1-S18)
 
-### API Monitoring
+| Signal | Description                    |
+| ------ | ------------------------------ |
+| S1     | ATR-based stop loss            |
+| S4     | Profitable days ratio          |
+| S5     | Moving stop                    |
+| S6     | No new high in XX days         |
+| S7     | Dark candle pattern            |
+| S8     | ATR volatility expansion       |
+| S10    | ATR ratio and high retracement |
+| S11    | Fibonacci 0.382 level          |
+| S12    | Fibonacci 0.236 level          |
+| S13    | Lowest low condition           |
+| S14    | Comparative price decline      |
+| S15    | Price pullback percentage      |
+| S16    | ATR increase with pullback     |
+| S17    | Range ratio                    |
+| S18    | RSI and lowest low condition   |
 
--   `GET /api/v1/monitoring/queues` - Queue status and job counts
--   `GET /api/v1/monitoring/workers` - Worker status and statistics
--   `GET /api/v1/monitoring/stats` - Overall system statistics
--   `GET /api/v1/monitoring/jobs/{queue_name}` - Detailed job information
+## Data Files
 
-### Logging
+The `data/` directory contains CSV files with:
 
--   **Structured Logging**: JSON format with configurable levels
--   **Log Directory**: `/app/logs` (mounted volume in Docker)
--   **Log Rotation**: Automatic log rotation and cleanup
--   **Docker Logs**: `docker-compose logs -f` for real-time monitoring
+-   OHLC data (Open, High, Low, Close)
+-   Stock codes (Hong Kong stocks)
+-   Trading dates
+-   Test data for backtesting
 
-## Development
+## Contributing
 
-### Adding Custom Logic
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit changes (`git commit -m 'Add AmazingFeature'`)
+4. Push to branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
-#### Algorithm Worker (First Queue)
+## License
 
-File: `app/workers/algorithm_worker.py`
-Function: `process_algorithm_task()`
+[Specify your license here]
 
-This worker receives stock codes and performs initial algorithm calculations.
+## Support
 
-#### Result Worker (Second Queue)
+For issues, questions, or contributions, please contact the development team or create an issue in the repository.
 
-File: `app/workers/result_worker.py`
-Function: `process_result_task()`
+---
 
-This worker receives processed results and performs final calculations.
-
-### Stock Code Processing
-
-The service automatically:
-
-1. Fetches stock codes from HKEX
-2. Filters out excluded ranges (derivatives, bonds, etc.)
-3. Validates numeric codes (≤ 9999)
-4. Queues valid codes for processing
-
-### Error Handling
-
--   **Retry Logic**: Configurable retry attempts for failed jobs
--   **Timeout Handling**: Worker timeouts prevent hanging processes
--   **Error Logging**: Comprehensive error logging and monitoring
--   **Graceful Degradation**: Service continues operating despite individual job failures
-
-## Dependencies
-
--   **FastAPI 0.104.1** - Web framework
--   **Uvicorn 0.24.0** - ASGI server
--   **Redis 5.0.1** - Queue and caching
--   **RQ 1.15.1** - Job queue system
--   **RQ Dashboard 0.8.5** - Monitoring interface
--   **Pandas 2.1.3** - Data processing
--   **OpenPyXL 3.1.5** - Excel file handling
--   **Requests 2.32.3** - HTTP client
-
-## Production Considerations
-
--   **Scaling**: Add more worker instances for increased throughput
--   **Monitoring**: Set up external monitoring for Redis and application health
--   **Security**: Configure Redis authentication and network security
--   **Backup**: Implement Redis persistence and backup strategies
--   **Logging**: Configure centralized logging for production environments
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Redis Connection**: Ensure Redis is running and accessible
-2. **Worker Startup**: Check worker logs for configuration issues
-3. **Stock Data**: Verify network connectivity to HKEX
-4. **Memory Usage**: Monitor Redis memory usage for large job queues
-
-### Health Checks
-
--   **API Health**: `GET /health`
--   **Redis Health**: Automatic health checks in Docker Compose
--   **Worker Health**: Monitor via RQ Dashboard or API endpoints
-
-bb21 = bollinger_bands(closes, 21, 2)
-bb82 = bollinger_bands(closes, 82, 2)
-
-    bbw21 = [(b['upper'] - b['lower']) / b["middle"] * 100 for b in bb21]
-    bbw82 = [(b['upper'] - b['lower']) / b["middle"] * 100 for b in bb82]
-
-    bbw_past_21 = bbw21[-21:]
-    bbw_past_82 = bbw21[-82:]
-    avgBBW21 = mean(bbw_past_21)
-    sorted82 = sorted(bbw_past_82)
-    idx = int(0.22 * len(sorted82))  # індекс елемента на ~22-му перцентилі
-    if idx >= len(sorted82):
-        idx = len(sorted82) - 1
-    p22 = sorted82[idx]
-    volatility_ok = avgBBW21 < p22
-    lastClose = closes[-1]
-    lastBB21 = bb21[-1]
-    price_ok = lastClose > lastBB21["upper"]
-
-    cond8 = volatility_ok and price_ok
+**Last Updated**: January 2026
