@@ -184,3 +184,4 @@ temp/
 .pytest_cache/
 
 data/
+hk_signal_dtl.csv
