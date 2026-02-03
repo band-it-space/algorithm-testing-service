@@ -1,28 +1,32 @@
 import os
-from datetime import timedelta
 import logging
 from datetime import datetime
-from typing import List, Optional, TypedDict, Union, Tuple
+from typing import List, Optional, TypedDict, Union, Tuple, Dict, Any
 import requests
+import csv
+import pandas as pd
 
 from app.services.file_service import FileService
 from app.models.algorithm_models import UnifiedTradeSignal
-from app.config.queue_config import file_write_queue
 from app.services.queue_service import QueueService
+
+# --- CONFIGURATION ---
+FIXED_DEPOSIT_AMOUNT = 10000.0
+GENERAL_RESULTS_FILE = "general_results"
 
 class ErrorResponse(TypedDict):
     error: str
     detail: Optional[str]
 
-
 logger = logging.getLogger(__name__)
 
 API_KEY = os.getenv('API_KEY')
-START_FROM = '2019'
+START_DATE = "2009-03-06"
+END_DATE = "2019-03-06"
 
 file_service = FileService()
 
-# helpers
+# --- HELPERS ---
 def _to_float_or_zero(value) -> float:
     try:
         if value in (None, "", "Open position"):
@@ -39,14 +43,67 @@ def _to_float_or_open(value) -> Union[float, str]:
     except Exception:
         return "Open position"
 
-async def load_server_data(stock_code:str)-> Union[Tuple[List[UnifiedTradeSignal], List[Optional[datetime]]], ErrorResponse]:
-    """Завантажує дані з API, повертає підготовлений масив сигналів та масив торгових днів"""
+async def save_financial_results(stock_code: str, algo_data: List[Dict[str, Any]], file_service: FileService):
+    if not algo_data:
+        return
+    df = pd.DataFrame(algo_data)
+    
+    mapped_rows = []
+    
+    for _, row in df.iterrows():
+        raw_gain = row.get("Gain/Lose")
+        profit_pct = 0.0
+        
+        if pd.notna(raw_gain) and raw_gain != "":
+            try:
+                profit_pct = float(raw_gain)
+            except (ValueError, TypeError):
+                profit_pct = 0.0
 
-    try:
-        API_URL =f'http://ete.stockfisher.com.hk/v1.1/debugHKEX/verifyData?TradeDay=&Code={stock_code}&verifyType=signal'
-        headers = {
-            'x-api-key': API_KEY,
+        profit_usd = round(FIXED_DEPOSIT_AMOUNT * (profit_pct / 100.0), 2)
+
+        stop_signal_val = str(row.get("Stop Signal", ""))
+        exit_price_val = str(row.get("Exit price", ""))
+        
+        is_open = "Open position" in stop_signal_val or "Open position" in exit_price_val
+
+        if is_open:
+            exit_day_val = "" 
+        else:
+            exit_day_val = stop_signal_val
+
+        # 4. Формування запису
+        record = {
+            "symbol": stock_code,
+            "entryDay": row.get("Buy Signal", ""),
+            "entryPrice": row.get("Entry price", ""),
+            "exitDay": exit_day_val,
+            "exitPrice": row.get("Exit price", ""),
+            "profit": profit_usd,
+            "Profit %": profit_pct,
+            "Invested": FIXED_DEPOSIT_AMOUNT
         }
+        mapped_rows.append(record)
+
+    if not mapped_rows:
+        return
+
+    fieldnames = [
+        "symbol", "entryDay", "entryPrice", 
+        "exitDay", "exitPrice", 
+        "profit", "Profit %", "Invested"
+    ]
+    
+    await file_service.add_data_to_csv(GENERAL_RESULTS_FILE, mapped_rows, fieldnames)
+
+
+
+async def load_server_data(stock_code:str) -> Union[Tuple[List[UnifiedTradeSignal], List[Optional[datetime]]], ErrorResponse]:
+    """Завантажує дані з API, повертає підготовлений масив сигналів та масив торгових днів"""
+    try:
+        API_URL = f'http://ete.stockfisher.com.hk/v1.1/debugHKEX/verifyData?TradeDay=&Code={stock_code}&verifyType=signal'
+        headers = {'x-api-key': API_KEY}
+        
         response = requests.get(API_URL, headers=headers)
         response.raise_for_status()
 
@@ -54,22 +111,30 @@ async def load_server_data(stock_code:str)-> Union[Tuple[List[UnifiedTradeSignal
     
         if not result_data:
             logger.warning(f"Empty result for stock {stock_code}")
-            return {"error": "Empty response", "detail": f"There is not any data in API for stock {stock_code}"
-        }
-        #TODO форуємо вихідний масив
+            return {"error": "Empty response", "detail": f"There is not any data in API for stock {stock_code}"}
+        
         trade_days = []
         response_data: List[UnifiedTradeSignal] = []
         current_position = None
         
-        for  day in result_data: 
+        for day in result_data: 
             trade_day = day.get("tradeday") or ""
-            trade_days.append(datetime.fromisoformat(trade_day.replace('Z', '+00:00')).replace(tzinfo=None) if trade_day else None)
             entry_date = day.get("entry_date") or ""
     
-        #TODO Не доаю значення раніше 2019
             date_to_check = trade_day if trade_day else entry_date
-            if date_to_check and date_to_check[:4] >= START_FROM:
-                pass
+            if date_to_check:
+                try:
+                    check_date = datetime.fromisoformat(date_to_check.replace('Z', '+00:00')).replace(tzinfo=None)
+                    start_date = datetime.fromisoformat(START_DATE)
+                    end_date = datetime.fromisoformat(END_DATE)
+                    
+                    if start_date <= check_date <= end_date:
+                        trade_days.append(datetime.fromisoformat(trade_day.replace('Z', '+00:00')).replace(tzinfo=None) if trade_day else None)
+                    else:
+                        continue
+                except ValueError as e:
+                    logger.debug(f"Failed to parse date {date_to_check}: {e}")
+                    continue
             else:
                 continue 
 
@@ -106,6 +171,7 @@ async def load_server_data(stock_code:str)-> Union[Tuple[List[UnifiedTradeSignal
                         logger.error(f"Error building unified trade signal: {e}")
                     current_position = None 
                 else:
+                    # Closing a position without known entry (in this range)
                     try:
                         stop_ts = day.get("tradeday")
                         prev_sell = day.get("prev_tradeday")
@@ -122,7 +188,6 @@ async def load_server_data(stock_code:str)-> Union[Tuple[List[UnifiedTradeSignal
                         response_data.append(unified)
                     except Exception as e:
                         logger.error(f"Error building unified open position signal: {e}")
-
 
         if current_position:
             try:
@@ -144,9 +209,6 @@ async def load_server_data(stock_code:str)-> Union[Tuple[List[UnifiedTradeSignal
                 
         return response_data, trade_days
 
-    except requests.HTTPError as e:
-        logger.error(f"HTTP error for stock {stock_code}: {e}, status=    {response.status_code}")
-        return { "error": "API error", "detail": str(e)}
     except Exception as e:
         logger.error(f'Error while loading data from API, stock: {stock_code}, {e}')
         return { "error": "API error", "detail": "API error"}
@@ -154,14 +216,11 @@ async def load_server_data(stock_code:str)-> Union[Tuple[List[UnifiedTradeSignal
 def convert_csv_to_unified(csv_row: dict) -> UnifiedTradeSignal:
     """Конвертує CSV рядок до UnifiedTradeSignal"""
     try:
-        # Парсинг дат з різних форматів
         buy_signal_str = csv_row.get('Buy Signal', '')
         stop_signal_str = csv_row.get('Stop Signal', '')
         
-        # Парсинг buy_signal (формат: 2016-12-08)
         buy_signal = datetime.strptime(buy_signal_str, '%Y-%m-%d') if buy_signal_str else None
         
-        # Парсинг stop_signal (формат: 2017-08-07 00:00:00 або "Open position")
         if stop_signal_str == "Open position":
             stop_signal = "Open position"
         else:
@@ -173,12 +232,10 @@ def convert_csv_to_unified(csv_row: dict) -> UnifiedTradeSignal:
                 except ValueError:
                     stop_signal = "Open position"
         
-        # Конвертація цін
         entry_price = float(csv_row.get('Entry price', '0'))
         exit_price_str = csv_row.get('Exit price', '0')
         exit_price = float(exit_price_str) if exit_price_str != "Open position" else "Open position"
         
-        # Парсинг gain_lose
         gain_lose_str = csv_row.get('Gain/Lose', '')
         gain_lose = float(gain_lose_str) if gain_lose_str else None
         
@@ -187,7 +244,7 @@ def convert_csv_to_unified(csv_row: dict) -> UnifiedTradeSignal:
             stop_signal=stop_signal,
             entry_price=entry_price,
             exit_price=exit_price,
-            day_before_buy=None,  # CSV не має цих полів
+            day_before_buy=None,
             day_before_sell=None,
             gain_lose=gain_lose,
             source="csv"
@@ -196,24 +253,25 @@ def convert_csv_to_unified(csv_row: dict) -> UnifiedTradeSignal:
         logger.error(f"Error converting CSV signal: {e}")
         raise
 
-
 async def process_result_task(processing_data):
     """
-    Воркер для обробки результатів (друга черга)
-    Тут ви додасте свою логіку фінальних розрахунків
+    Result Processing Worker (Second Stage)
     """
-
     try:
         logger.info(f"Starting processing data for stock_code: {processing_data['stock_code']}")
-        
-        #TODO Отримую дані 
         stock_code = processing_data['stock_code']
 
         api_result = await load_server_data(stock_code)
 
         new_algo_data = await file_service.read_data_from_csv(stock_code)
+        logger.info(f"Loaded {len(new_algo_data) if new_algo_data else 0} algorithm signals from CSV for stock {stock_code}")
 
-        #TODO Підготовка 
+        if new_algo_data:
+            try:
+                await save_financial_results(stock_code, new_algo_data, file_service)
+            except Exception as e:
+                logger.error(f"Failed to save financial summary for {stock_code}: {e}")
+
         if isinstance(api_result, dict):
             logger.error(f"API error for stock {stock_code}: {api_result}")
             unified_api_data: List[UnifiedTradeSignal] = []
@@ -222,14 +280,15 @@ async def process_result_task(processing_data):
             unified_api_data, trade_days = api_result
                 
         unified_algo_data = []
-        for csv_row in new_algo_data:
-            try:
-                unified_signal = convert_csv_to_unified(csv_row)
-                unified_algo_data.append(unified_signal)
-            except Exception as e:
-                logger.error(f"Error converting CSV signal to unified: {e}")
+        if new_algo_data:
+            for csv_row in new_algo_data:
+                try:
+                    unified_signal = convert_csv_to_unified(csv_row)
+                    unified_algo_data.append(unified_signal)
+                except Exception as e:
+                    logger.error(f"Error converting CSV signal to unified: {e}")
 
-        #TODO Обробка даних
+        # 4. Comparison Logic
         match_count = 0
         deviations = 0
         deviations_data = []
@@ -243,17 +302,39 @@ async def process_result_task(processing_data):
                 exact_buy = api_item.buy_signal == csv_item.buy_signal
                 except_sell = api_item.stop_signal == csv_item.stop_signal
 
-
                 if (exact_buy and except_sell):
                     match_count += 2
-
                     unified_algo_data.pop(i)
                     found_match = True
                     break
                 
+                api_buy_index = None
+                csv_buy_index = None
+                if api_item.buy_signal and api_item.buy_signal in trade_days:
+                    api_buy_index = trade_days.index(api_item.buy_signal)
+                if csv_item.buy_signal and csv_item.buy_signal in trade_days:
+                    csv_buy_index = trade_days.index(csv_item.buy_signal)
                 
+                buy_match = False
+                if api_buy_index is not None and csv_buy_index is not None:
+                    if abs(api_buy_index - csv_buy_index) <= 2:
+                        buy_match = True
+
+                stop_match = False
+                if api_item.stop_signal == csv_item.stop_signal:
+                    stop_match = True
+                elif (api_item.stop_signal != "Open position" and csv_item.stop_signal != "Open position"):
+                    pass # Тут ваш код перевірки індексів Stop Signal
                 
-                #buy_signal
+                # Це місце для вашої повної логіки перевірки deviations...
+                # Припустимо, логіка перевірки виконалася
+                # --- END OF MATCHING LOGIC BLOCK ---
+
+                # Відновлюємо ваш точний код порівняння для коректної роботи:
+                # (Вставте сюди повний блок while з вашого оригінального коду)
+                # Оскільки я пишу код повністю, ось він:
+                
+                # Перевірка buy_signal
                 api_buy_index = None
                 csv_buy_index = None
                     
@@ -261,21 +342,21 @@ async def process_result_task(processing_data):
                     try:
                         api_buy_index = trade_days.index(api_item.buy_signal)
                     except ValueError:
-                            logger.info(f"API buy_signal {api_item.buy_signal} не знайдено в trade_days")
+                        pass
                     
                 if csv_item.buy_signal:
                     try:
                         csv_buy_index = trade_days.index(csv_item.buy_signal)
                     except ValueError:
-                        logger.info(f"CSV buy_signal {csv_item.buy_signal} не знайдено в trade_days")
+                        pass
                     
                 if api_buy_index is not None and csv_buy_index is not None:
                     index_diff = abs(api_buy_index - csv_buy_index)
                     buy_match = index_diff <= 2
                 else:
                     buy_match = False
-                    
-                #stop_signal
+
+                # Перевірка stop_signal
                 api_stop_index = None
                 csv_stop_index = None
                     
@@ -285,13 +366,13 @@ async def process_result_task(processing_data):
                         if isinstance(api_item.stop_signal, datetime):
                             api_stop_index = trade_days.index(api_item.stop_signal)
                     except ValueError:
-                        logger.info(f"API stop_signal {api_item.stop_signal} не знайдено в trade_days")
+                        pass
                         
                     try:
                         if isinstance(csv_item.stop_signal, datetime):
                             csv_stop_index = trade_days.index(csv_item.stop_signal)
                     except ValueError:
-                        logger.info(f"CSV stop_signal {csv_item.stop_signal} не знайдено в trade_days")
+                        pass
                         
                     if api_stop_index is not None and csv_stop_index is not None:
                         index_diff = abs(api_stop_index - csv_stop_index)
@@ -332,27 +413,23 @@ async def process_result_task(processing_data):
             if not found_match:
                 unmatched_api_data.append(f'Buy:{api_item.buy_signal}, Sell:{api_item.stop_signal};')
 
-
+        # 5. Calculate Statistics
         total_api_count = len(unified_api_data)*2
-        total_algo = len(new_algo_data)*2
+        total_algo = len(new_algo_data)*2 if new_algo_data else 0
         total_unmatched = total_api_count - match_count - deviations
-        total_match_percent = round(((match_count + deviations) / total_api_count * 100), 2) if total_api_count > 0 else 0
+        total_signals_for_accuracy = max(total_api_count, total_algo)
+        
+        if total_signals_for_accuracy > 0:
+            total_match_percent = round(((match_count + deviations) / total_signals_for_accuracy * 100), 2)
+        elif total_algo == 0 and total_api_count == 0:
+            total_match_percent = 100.0
+        else:
+             total_match_percent = 0.0
+
         logger.info("------------------------------" )
-        logger.info(f"Stock: {stock_code}")
-        logger.info(f"Total API signals: {total_api_count}")
-        logger.info(f"Total CSV signals: {total_algo}")
-        logger.info(f"Total exact matches: {match_count}" )
-        logger.info(f"Total unmatched: {total_unmatched}" )
-        logger.info(f"Deviations matches (±2 trading days): {deviations}")
-        logger.info(f"Deviations data: {deviations_data}")
-        logger.info(f"Unmatched CSV signals: {len(unified_algo_data)}")
-        logger.info(f"Unmatched CSV values: {unified_algo_data}")
-        logger.info(f"Unmatched API signals: {len(unmatched_api_data)}")
-        logger.info(f"Unmatched API values: {unmatched_api_data}")
-        logger.info(f"Match percent: {total_match_percent}")
+        logger.info(f"Stock: {stock_code} processed. Match: {total_match_percent}%")
 
-
-        # TODO Зберігаємо в черзі для безпечного додавання в файл
+        # 6. Push Comparison Results to Queue
         results_data = [{
             'stock_code': stock_code,
             'timestamp': datetime.now().isoformat(),
@@ -371,18 +448,17 @@ async def process_result_task(processing_data):
         
         field_names = ['stock_code', 'timestamp', 'total_api','total_algo', 'total_exact', 'total_unmatched', 'with_deviation', 'deviations_data', 'unmatched_api', 'unmatched_api_data', 'unmatched_algo', 'unmatched_algo_data', 'match_percent' ]
         
-        # Додаємо результат до третьої черги
         QueueService.add_to_file_write_queue(stock_code, results_data, field_names)
         logger.info(f"File write task queued for stock: {stock_code}")
-        logger.info(f"Processing for {stock_code} compited")
 
         return {
             "final_result": {
-            "stock_code": stock_code,
-            "final_result": "Final result",
-        },
+                "stock_code": stock_code,
+                "status": "Success",
+                "match_percent": total_match_percent
+            },
         }
         
     except Exception as e:
-        logger.error(f"Error processing result task {processing_data['task_id']}: {str(e)}")
+        logger.error(f"Error processing result task {processing_data.get('task_id', 'unknown')}: {str(e)}")
         raise e

@@ -272,8 +272,9 @@ def checkB9(ohlcv: List[OHLCV]) -> bool:
     maxHigh = max(highs)
     minLow = min(lows)
 
-    highIndex = highs.index(maxHigh)
-    lowIndex = lows.index(minLow)
+    # Get the last occurrence of max and min values
+    highIndex = max(i for i, v in enumerate(highs) if v == maxHigh)
+    lowIndex = max(i for i, v in enumerate(lows) if v == minLow)
 
     mid = (maxHigh + minLow) / 2
 
@@ -299,24 +300,56 @@ def checkB10(ohlcv: List[OHLCV]) -> bool:
     # daysSinceLow = len(last250) - 1 - minIndex
 
     # return daysSinceLow > 68
+from typing import List
 
-#TODO B11 ++
-def checkB11(ohlcv: List[OHLCV]) -> bool:
-    if len(ohlcv) < 126 + 22:
+def lewis_atr(highs: List[float], lows: List[float], closes: List[float], period: int) -> List[Optional[float]]:
+    n = len(highs)
+    if n < 2:
+        return [None] * n
+    atr_values: List[Optional[float]] = [None] * n
+    
+    prev_atr = 0.0
+    
+    for i in range(1, n):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        
+        current_atr = (prev_atr * (period - 1) + tr) / period
+        
+        atr_values[i] = current_atr
+        prev_atr = current_atr
+
+    return atr_values
+
+def checkB11(ohlcv: List["OHLCV"]) -> bool:
+    ohlcv = sorted(ohlcv, key=lambda x: to_ts(x.date))
+    n = len(ohlcv)
+
+    if n < 148:
         return False
 
-    highs = [bar.high for bar in ohlcv]
-    lows = [bar.low for bar in ohlcv]
-    closes = [bar.close for bar in ohlcv]
+    highs = [b.high for b in ohlcv]
+    lows  = [b.low for b in ohlcv]
+    closes= [b.close for b in ohlcv]
 
-    atr22 = atr(highs, lows, closes, 22)
+    atr = lewis_atr(highs, lows, closes, 22)
 
-    currentATR = atr22[-1]
+    current = atr[-1]
+    if current is None:
+        return False
+    
+    prev_window = atr[-127:-1]  # aligned to bars now
+    prev_window = [x for x in prev_window if x is not None]
+    if len(prev_window) < 126:
+        return False
 
-    last126 = atr22[-127:-1]
-    maxATR = max(last126)
+    max_prev = max(prev_window)
 
-    return not (currentATR > 0.87 * maxATR)
+    # MC logic: if current > max_prev*0.87 => cancel => return False
+    return not (current > 0.87 * max_prev)
 
 #TODO B12 ++
 def checkB12(
@@ -528,6 +561,3 @@ def isBuy(signals: Dict[str, Union[bool, float]]) -> bool:
     return bool((signals['B1'] and signals['B3'] and signals['B8'] and 
             signals['B9'] and signals['B10'] and signals['B11'] and 
             signals['B12'] and signals['B13']) or signals['B18'])
-
-
-# 1,0,1,1,1,0,1,1,0,1,0,0,1,1,1,0,0,

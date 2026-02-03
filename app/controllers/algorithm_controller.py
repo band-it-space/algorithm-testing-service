@@ -22,7 +22,6 @@ async def init_algo_testing():
                 "message": "No stocks found",
                 "status": "error",
             }
-        # stocks = stocks[:1]
         exist = await file_service.read_data_from_csv("results")
 
         existing_codes = {str(item.get("stock_code")) for item in exist}
@@ -53,35 +52,3 @@ async def init_algo_testing():
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start algorithm testing: {str(e)}")
-
-# @algorithm_router.post("/start", response_model=dict)
-# async def start_algorithm_testing(request: AlgorithmRequest):
-#     """
-#     Запускає тестування алгоритму, додаючи завдання до першої черги
-#     """
-#     try:
-#         task_id = QueueService.add_to_algorithm_queue(request)
-        
-#         return {
-#             "message": "Algorithm testing started successfully",
-#             "task_id": task_id,
-#             "status": "queued",
-#         }
-    
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=f"Failed to start algorithm testing: {str(e)}")
-
-# @algorithm_router.get("/status")
-# async def get_queues_status():
-#     """
-#     Повертає статус черг
-#     """
-#     try:
-#         status = QueueService.get_queue_status()
-#         return {
-#             "message": "Queue status retrieved successfully",
-#             "queues": status
-#         }
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=f"Failed to get queue status: {str(e)}")
-
