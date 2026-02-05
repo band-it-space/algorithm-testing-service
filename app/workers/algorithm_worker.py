@@ -13,13 +13,14 @@ from app.workers.algo_func.buy_signals import runAllBuyConditions, isBuy, OHLCV
 from typing import Optional, Dict, Any, List, Union
 from app.workers.algo_func.sell_signals import runAllSellConditions, isSell
 from app.workers.algo_func.get_code_energy import calculate_energy_indicators_last_16_days
+from app.models.algorithm_models import AlgorithmParameters
 
 
 logger = logging.getLogger(__name__)
 API_KEY = os.getenv('API_KEY')
 
-START_DATE = "2009-03-06"
-END_DATE = "2019-03-06"
+START_DATE = "2016-01-01"
+END_DATE = "2026-02-02"
 
 
 async def process_algorithm_task(task_data):
@@ -30,25 +31,33 @@ async def process_algorithm_task(task_data):
 
     try:
         stock_code = task_data['stock']
-        logger.info(f"Processing algorithm task: {stock_code}")
+        genome_id = task_data.get('genome_id', 'G_000')
+        params_dict = task_data.get('parameters', {})
+        params = AlgorithmParameters.from_dict(params_dict)
+        
+        logger.info(f"Processing algorithm task: {stock_code}, genome: {genome_id}")
         await init_db_pool()
 
         logger.info('Starting get_data_and_save_to_csv')
-        await get_data_and_save_to_csv(stock_code, START_DATE)
+        await get_data_and_save_to_csv(stock_code, START_DATE, genome_id)
         logger.info('Finished get_data_and_save_to_csv')
 
         logger.info('Starting signals_for_the_period')
-        await signals_for_the_period(stock_code, END_DATE)
+        await signals_for_the_period(stock_code, END_DATE, params, genome_id)
         logger.info('Finished signals_for_the_period')
 
         logger.info('Starting format_signals_csv_inplace')
-        await format_signals_csv_inplace(file_service=FileService(), file_name=stock_code)
+        await format_signals_csv_inplace(file_service=FileService(), file_name=stock_code, genome_id=genome_id)
         logger.info('Finished format_signals_csv_inplace')
 
         # Додаємо результат до другої черги
-        processing_task_id = QueueService.add_to_result_processing_queue(stock_code)
+        processing_task_id = QueueService.add_to_result_processing_queue(
+            stock_code, 
+            genome_id=genome_id, 
+            parameters=params.to_dict()
+        )
         
-        logger.info(f"Algorithm task {task_data['task_id']} completed, added to processing queue: {processing_task_id}")
+        logger.info(f"Algorithm task {task_data['task_id']} completed, genome: {genome_id}, added to processing queue: {processing_task_id}")
         
         return task_data
         
@@ -57,7 +66,8 @@ async def process_algorithm_task(task_data):
         raise e
 
 
-async def get_data_and_save_to_csv(code: str, trade_date: str, file_service: "FileService" = None):
+async def get_data_and_save_to_csv(code: str, trade_date: str, genome_id: str = "G_000", 
+                                    file_service: "FileService" = None):
     if file_service is None:
         file_service = FileService()
 
@@ -67,6 +77,7 @@ async def get_data_and_save_to_csv(code: str, trade_date: str, file_service: "Fi
 
     fieldnames = [
         "code",
+        "genome_id",
         "tradeday",
         "position_status",
         "next_open_action",
@@ -84,6 +95,7 @@ async def get_data_and_save_to_csv(code: str, trade_date: str, file_service: "Fi
 
     csv_row = {
         "code": code,
+        "genome_id": genome_id,
         "tradeday": effective_date,
         "position_status": "F",
         "next_open_action": "N",
@@ -106,10 +118,8 @@ async def get_data_and_save_to_csv(code: str, trade_date: str, file_service: "Fi
             fieldnames=fieldnames,
         )
         if saved:
-            # logger.info(f"Дані успішно записано у файл data/{code}.csv")
             return csv_row
         else:
-            # logger.info("Помилка під час запису CSV через FileService")
             return None
 
     except Exception as e:
@@ -117,8 +127,11 @@ async def get_data_and_save_to_csv(code: str, trade_date: str, file_service: "Fi
         return None
 
 
-# Write calculated metrics to CVS - before signals
-async def signals_for_the_period(code, trade_date):
+async def signals_for_the_period(code, trade_date, params: AlgorithmParameters = None, 
+                                  genome_id: str = "G_000"):
+    if params is None:
+        params = AlgorithmParameters()
+    
     print("start")
     spy_data_raw = await get_stock_data_from_db("2800", trade_date)
     code_data_raw = await get_stock_data_from_db(code, trade_date)
@@ -147,13 +160,11 @@ async def signals_for_the_period(code, trade_date):
         for bar in code_data_raw
     ]
     
-    # logger.info(f'Code_data-{code_data[0]}')
-
     latest_signal = await get_latest_signal(code)
 
     if latest_signal is None:
         print(f"Немає сигналу для коду {code}")
-        latest_signal = await get_data_and_save_to_csv(code, trade_date)
+        latest_signal = await get_data_and_save_to_csv(code, trade_date, genome_id)
 
     latest_date = pd.to_datetime(latest_signal["tradeday"]).tz_localize(None)
 
@@ -163,12 +174,9 @@ async def signals_for_the_period(code, trade_date):
         if bar_date > latest_date:
             filtered_code_data.append(bar)
 
-    # print(len(filtered_code_data))
-    
     results_batch: List[Dict[str, Any]] = []
 
     for bar in filtered_code_data:
-        # print(bar)
         tradeday = pd.to_datetime(bar.date).tz_localize(None)
 
         filtered_spy = [
@@ -182,16 +190,14 @@ async def signals_for_the_period(code, trade_date):
             tradeday.strftime("%Y-%m-%d"), filtered_code, filtered_spy
         )
 
-        # print(latest_signal)
-
         position_status = latest_signal["position_status"]
 
         if position_status == "F":
             buySignals = runAllBuyConditions(
-                filtered_code, tradeday.strftime("%Y-%m-%d"), filtered_spy
+                filtered_code, tradeday.strftime("%Y-%m-%d"), filtered_spy, params
             )
-            logger.info(f'Trade day: {tradeday.strftime("%Y-%m-%d")}, stock: {code}')
-            logger.info(F'Buy signals: {buySignals}')
+            logger.info(f'Trade day: {tradeday.strftime("%Y-%m-%d")}, stock: {code}, genome: {genome_id}')
+            logger.info(f'Buy signals: {buySignals}')
             buy = isBuy(buySignals)
 
             exit_price = 0
@@ -200,6 +206,7 @@ async def signals_for_the_period(code, trade_date):
 
             result = {
                 "code": code,
+                "genome_id": genome_id,
                 "tradeday": tradeday,
                 "position_status": position_status,
                 "next_open_action": "B" if buy else "N",
@@ -222,24 +229,15 @@ async def signals_for_the_period(code, trade_date):
                 "next_open_action": "B" if buy else "N",
             }
             results_batch.append(result)
-            # logger.info(result)
-            # return result
 
         elif position_status == "I":
             entry_date = latest_signal.get("entry_date")
             entry_price = latest_signal.get("entry_price")
 
-            # logger.info(entry_date)
-            # logger.info(entry_price)
-
             if latest_signal["next_open_action"] == "B":
                 entry_date = tradeday.strftime("%Y-%m-%d")
                 entry_price = bar.open
-                # print(entry_date)
-                # print(entry_price)
 
-
-            # next_open_action = latest_signal.get("next_open_action")
             exit1 = to_float_or_none(latest_signal.get("exit1"))
             sellSignals = runAllSellConditions(
                 filtered_code,
@@ -248,13 +246,15 @@ async def signals_for_the_period(code, trade_date):
                 to_float_or_none(entry_price),
                 exit1,
                 tradeday.strftime("%Y-%m-%d"),
+                params,
             )
-            logger.info(f'Trade day: {tradeday.strftime("%Y-%m-%d")}, stock: {code}')
+            logger.info(f'Trade day: {tradeday.strftime("%Y-%m-%d")}, stock: {code}, genome: {genome_id}')
             logger.info(f'Sell signals: {sellSignals}')
             sell = isSell(sellSignals['conditions'])
             new_stop_loss = sellSignals['stop_loss']
             result = {
                 "code": code,
+                "genome_id": genome_id,
                 "tradeday": tradeday,
                 "position_status": position_status,
                 "next_open_action": "S" if sell else "N",
@@ -277,12 +277,9 @@ async def signals_for_the_period(code, trade_date):
                 "next_open_action": "S" if sell else "N",
             }
             results_batch.append(result)
-            # print(result)
-            # return result
             
     if len(results_batch) > 0:
         await append_to_signals_csv(results_batch, code)
-        # logger.info(f"Appended {len(results_batch)} rows to {code}.csv: {'OK' if ok else 'FAILED'}")        
             
 def to_float_or_none(v):
     if v is None:
@@ -309,7 +306,7 @@ async def append_to_signals_csv(
         file_service = FileService()
 
     fieldnames = [
-        "code","tradeday","position_status","next_open_action",
+        "code","genome_id","tradeday","position_status","next_open_action",
         "E1","E2","E3","E4","E5",
         "exit1","close","entry_price","entry_date","exit_price",
     ]
@@ -341,8 +338,6 @@ async def append_to_signals_csv(
         data=rows,
         fieldnames=fieldnames,
     )
-
-
 
 async def get_latest_signal(
     code: str,
@@ -402,6 +397,7 @@ def _to_date_str_or_none(v):
 async def format_signals_csv_inplace(
     file_service: "FileService" = None,
     file_name: str = "signals",
+    genome_id: str = "G_000",
 ) -> Optional[pd.DataFrame]:
     if file_service is None:
         file_service = FileService()
@@ -412,9 +408,9 @@ async def format_signals_csv_inplace(
 
     df = pd.DataFrame(rows_raw)
 
-    for col in ["next_open_action", "tradeday", "entry_date"]:
+    for col in ["next_open_action", "tradeday", "entry_date", "genome_id"]:
         if col not in df.columns:
-            df[col] = np.nan
+            df[col] = np.nan if col != "genome_id" else genome_id
 
     for col in ["entry_price", "exit_price", "close"]:
         if col not in df.columns:
@@ -442,6 +438,7 @@ async def format_signals_csv_inplace(
 
         entry_price = row.get("entry_price")
         buy_signal_date = row.get("entry_date")
+        row_genome_id = row.get("genome_id", genome_id)
 
         entry_f = _to_float_or_none(entry_price)
         exit_f = _to_float_or_none(exit_price)
@@ -454,6 +451,7 @@ async def format_signals_csv_inplace(
                 gain = None
 
         result_rows.append({
+            "Genome ID": row_genome_id,
             "Buy Signal": _to_date_str_or_none(buy_signal_date) or "",
             "Stop Signal": _to_date_str_or_none(stop_signal_date) or "",
             "Entry price": entry_f if entry_f is not None else "",
@@ -476,6 +474,7 @@ async def format_signals_csv_inplace(
 
         entry_price = _to_float_or_none(b_row.get("entry_price"))
         last_close = _to_float_or_none(df.iloc[-1].get("close"))
+        row_genome_id = b_row.get("genome_id", genome_id)
 
         gain_open = None
         if entry_price and last_close:
@@ -485,6 +484,7 @@ async def format_signals_csv_inplace(
                 gain_open = None
 
         result_rows.append({
+            "Genome ID": row_genome_id,
             "Buy Signal": _to_date_str_or_none(buy_signal_date) or "",
             "Stop Signal": "Open position",
             "Entry price": entry_price if entry_price is not None else "",
@@ -494,7 +494,7 @@ async def format_signals_csv_inplace(
 
     out_df = pd.DataFrame(
         result_rows,
-        columns=["Buy Signal", "Stop Signal", "Entry price", "Exit price", "Gain/Lose"]
+        columns=["Genome ID", "Buy Signal", "Stop Signal", "Entry price", "Exit price", "Gain/Lose"]
     )
     
     cutoff = pd.to_datetime(START_DATE)

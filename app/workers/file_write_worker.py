@@ -1,73 +1,79 @@
 import csv
 import os
 import logging
+from typing import Dict, Any, List, Optional
 
 from app.services.file_service import FileService
+
 logger = logging.getLogger(__name__)
 file_service = FileService()
 
-async def process_file_write_task(task_data):
+
+async def process_file_write_task(task_data: Dict[str, Any]):
     """
-    Обробляє завдання запису файлу з черги
+    Process file write task from queue.
+    Supports genome-based results and optimization data.
     """
     try:
-        logger.info("------------------------------" )
-        logger.info(f"Processing file write task: {task_data}")
-        # stock_code = task_data.get('stock_code')
-        # missed_db = task_data.get('missed_db', [])
-        # missed_api = task_data.get('missed_api', [])
-        # total_api = task_data.get('total_api', 0)
-        # total_db = task_data.get('total_db', 0)
-        # total_db_from_2019 = task_data.get('sorted_db', 0)
-        # total_api_from_2019 = task_data.get('sorted_api', 0)
+        logger.info("------------------------------")
+        logger.info(f"Processing file write task: {task_data.get('stock_code', 'unknown')}")
         
-        
-
-        # #TODO Version for missed data
-        # fields_names_all = ['stock', 'total_api', 'total_db', "total_api_from_2019", "total_db_from_2019", 'missed_db', 'missed_api']
-
-        # await file_service.add_data_to_csv("checked_all",
-        #     [{
-        #         'stock': stock_code,
-        #         'total_api':total_api, 
-        #         'total_db': total_db, 
-        #         'missed_api': len(missed_api), 
-        #         'missed_db': len(missed_db),
-        #         "total_db_from_2019":total_db_from_2019,
-        #         "total_api_from_2019": total_api_from_2019
-        #     }], fields_names_all)
-
-        # fields_names_with_dates = ['stock', 'missed_db', 'missed_api']
-
-        # def format_dates(dates, stock, key):
-        #     return [
-        #         {"stock": stock, "missed_db": "-", "missed_api": "-",
-        #             key: d.strftime("%Y-%m-%d")}
-        #         for d in dates
-        #     ]
-
-        # updated_missed_api = format_dates(missed_api, stock_code, "missed_api")
-        # updated_missed_db = format_dates(missed_db, stock_code, "missed_db")
-
-        # await file_service.add_data_to_csv("checked_all_dates",
-        #     updated_missed_api + updated_missed_db, 
-        #     fields_names_with_dates)
-        #!OLD
-        results_data = task_data.get('results_data', [])
-        field_names = task_data.get('field_names', [])
         stock_code = task_data.get('stock_code')
-        logger.info("------------------------------" )
-        logger.info(f"Processing file write task for stock: {stock_code}")
+        genome_id = task_data.get('genome_id', 'G_000')
+        data = task_data.get('data', {})
         
-        success = await file_service.add_data_to_csv("results", results_data, field_names)
+        results_data = data.get('results_data', task_data.get('results_data', []))
+        field_names = data.get('field_names', task_data.get('field_names', []))
+        optimization_id = data.get('optimization_id', task_data.get('optimization_id'))
+        
+        logger.info(f"Processing file write for stock: {stock_code}, genome: {genome_id}")
+        
+        # Determine output file based on context
+        if optimization_id:
+            output_file = f"optimization_{optimization_id}_results"
+        else:
+            output_file = "results"
+        
+        success = await file_service.add_data_to_csv(output_file, results_data, field_names)
         
         if success:
-            logger.info(f"File write task completed successfully for stock: {stock_code}")
+            logger.info(f"File write completed for stock: {stock_code}, genome: {genome_id}")
         else:
-            logger.error(f"File write task failed for stock: {stock_code}")
+            logger.error(f"File write failed for stock: {stock_code}, genome: {genome_id}")
             
-        return {"success": success, "stock_code": stock_code}
+        return {"success": success, "stock_code": stock_code, "genome_id": genome_id}
         
     except Exception as e:
         logger.error(f"Error processing file write task: {str(e)}")
         return {"success": False, "error": str(e)}
+
+
+async def write_optimization_summary(
+    optimization_id: str,
+    results: List[Dict[str, Any]],
+    output_file: Optional[str] = None
+):
+    """
+    Write final optimization summary to CSV.
+    Uses format matching Output Results Sample.csv.
+    """
+    try:
+        from app.services.results_aggregation_service import get_output_fieldnames
+        
+        if not results:
+            logger.warning(f"No results to write for optimization {optimization_id}")
+            return False
+        
+        output_file = output_file or f"optimization_{optimization_id}_summary"
+        fieldnames = get_output_fieldnames()
+        
+        success = await file_service.add_data_to_csv(output_file, results, fieldnames)
+        
+        if success:
+            logger.info(f"Optimization summary written to {output_file}.csv ({len(results)} rows)")
+        
+        return success
+        
+    except Exception as e:
+        logger.error(f"Error writing optimization summary: {e}")
+        return False

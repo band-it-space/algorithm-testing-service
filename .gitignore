@@ -162,6 +162,14 @@ Thumbs.db
 *.p12
 *.pfx
 
+# Google credentials
+credentials/
+service_account.json
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+
 # Database files
 *.db
 *.sqlite

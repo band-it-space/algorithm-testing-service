@@ -1,0 +1,3 @@
+Genome ID	Stock Code	Trade Count	Profit Delta (%)	Win Rate Delta (%)	Total Win ($)	Total Loss ($)	Trades Win	Trades Loss	Avg Win ($)	Avg Loss ($)	Payoff Ratio	input_B1_upper_range	input_B3_LR_lookback	input_B11_atr_threshold	input_B18_bbw_ratio	input_S1_atr_mult	input_S5_push_up_atr
+G_000 (BASE)	3888	10	0	50	21,580	8,045	5	5	4,316	1,609	2.68	0.65	58	0.87	0.22	3.7	0.62
+G_001	3888	9	15.89	44.44	20,525	4,839	4	4	5,131	1,210	4.24	0.75	40	0.8	0.15	3.7	0.4

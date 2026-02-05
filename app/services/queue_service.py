@@ -1,119 +1,187 @@
 import os
 import uuid
-from datetime import datetime, date
-from typing import Dict, List
-from app.config.queue_config import algorithm_calculation_queue, result_processing_queue
-from app.models.algorithm_models import AlgorithmRequest, QueueTask
+import json
+import logging
+from datetime import datetime
+from typing import Optional, Dict, Any, List
+import redis
+from rq import Queue
+
+logger = logging.getLogger(__name__)
+
 
 class QueueService:
-
+    """Service for managing task queues with Redis."""
+    
+    _redis_client: Optional[redis.Redis] = None
+    _algorithm_queue: Optional[Queue] = None
+    _result_queue: Optional[Queue] = None
+    _file_write_queue: Optional[Queue] = None
+    
+    ALGORITHM_QUEUE = "algorithm_calculation"
+    RESULT_PROCESSING_QUEUE = "result_processing"
+    FILE_WRITE_QUEUE = "file_write"
+    
+    @classmethod
+    def get_redis_client(cls) -> redis.Redis:
+        if cls._redis_client is None:
+            import os
+            redis_host = os.getenv("REDIS_HOST", "localhost")
+            redis_port = int(os.getenv("REDIS_PORT", 6379))
+            redis_db = int(os.getenv("REDIS_DB", 0))
+            cls._redis_client = redis.Redis(
+                host=redis_host,
+                port=redis_port,
+                db=redis_db,
+                decode_responses=False  # RQ needs bytes
+            )
+        return cls._redis_client
+    
+    @classmethod
+    def get_algorithm_queue(cls) -> Queue:
+        if cls._algorithm_queue is None:
+            client = cls.get_redis_client()
+            timeout = int(os.getenv("ALGORITHM_WORKER_TIMEOUT", 1000))
+            cls._algorithm_queue = Queue(cls.ALGORITHM_QUEUE, connection=client, default_timeout=timeout)
+        return cls._algorithm_queue
+    
+    @classmethod
+    def get_result_queue(cls) -> Queue:
+        if cls._result_queue is None:
+            client = cls.get_redis_client()
+            timeout = int(os.getenv("RESULT_WORKER_TIMEOUT", 300))
+            cls._result_queue = Queue(cls.RESULT_PROCESSING_QUEUE, connection=client, default_timeout=timeout)
+        return cls._result_queue
+    
+    @classmethod
+    def get_file_write_queue(cls) -> Queue:
+        if cls._file_write_queue is None:
+            client = cls.get_redis_client()
+            timeout = int(os.getenv("FILE_WRITE_WORKER_TIMEOUT", 60))
+            cls._file_write_queue = Queue(cls.FILE_WRITE_QUEUE, connection=client, default_timeout=timeout)
+        return cls._file_write_queue
+    
     @staticmethod
-    def add_to_algorithm_queue(stock_code: str) -> str:
-        """
-        Додає завдання до першої черги (algorithm_calculation)
-        """
-        task_id = str(uuid.uuid4())
+    def add_to_algorithm_queue(
+        stock_code: str,
+        genome_id: str = "G_000",
+        parameters: Optional[Dict[str, Any]] = None,
+        optimization_id: Optional[str] = None
+    ) -> str:
+        """Add a task to the algorithm processing queue."""
+        from app.workers.algorithm_worker import process_algorithm_task
         
+        task_data = {
+            "task_id": str(uuid.uuid4()),
+            "stock": stock_code,
+            "genome_id": genome_id,
+            "parameters": parameters or {},
+            "optimization_id": optimization_id,
+            "created_at": datetime.now().isoformat(),
+        }
+        
+        queue = QueueService.get_algorithm_queue()
+        job = queue.enqueue(process_algorithm_task, task_data)
+        
+        logger.info(f"Added task {task_data['task_id']} to algorithm queue: stock={stock_code}, genome={genome_id}")
+        
+        return job.id
+    
+    @staticmethod
+    def add_to_result_processing_queue(
+        stock_code: str,
+        genome_id: str = "G_000",
+        parameters: Optional[Dict[str, Any]] = None,
+        optimization_id: Optional[str] = None,
+        results: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Add a task to the result processing queue."""
+        task_id = str(uuid.uuid4())
         task_data = {
             "task_id": task_id,
             "stock": stock_code,
+            "genome_id": genome_id,
+            "parameters": parameters or {},
+            "optimization_id": optimization_id,
+            "results": results or {},
             "created_at": datetime.now().isoformat(),
-            "queue_name": "algorithm_calculation"
         }
         
-        job = algorithm_calculation_queue.enqueue(
-            'app.workers.algorithm_worker.process_algorithm_task',
-            task_data,
-            job_id=task_id
-        )
+        client = QueueService.get_redis_client()
+        client.rpush(QueueService.RESULT_PROCESSING_QUEUE, json.dumps(task_data))
+        logger.info(f"Added task {task_id} to result processing queue: stock={stock_code}, genome={genome_id}")
         
         return task_id
     
     @staticmethod
-    def add_to_result_processing_queue(stock_code: str) -> str:
-        """
-        Додає результат до другої черги (result_processing)
-        """
+    def add_to_file_write_queue(
+        stock_code: str,
+        genome_id: str = "G_000",
+        data: Optional[Dict[str, Any]] = None,
+        optimization_id: Optional[str] = None
+    ) -> str:
+        """Add a task to the file write queue."""
         task_id = str(uuid.uuid4())
-        
-        processing_data = {
+        task_data = {
             "task_id": task_id,
-            "stock_code": stock_code,
+            "stock": stock_code,
+            "genome_id": genome_id,
+            "data": data or {},
+            "optimization_id": optimization_id,
+            "created_at": datetime.now().isoformat(),
         }
         
-        # Додаємо завдання до черги обробки результатів
-        job = result_processing_queue.enqueue(
-            'app.workers.result_worker.process_result_task',
-            processing_data,
-            job_id=task_id
-        )
-        
-        return task_id
-    @staticmethod
-    # def add_to_file_write_queue(stock_code: str, total_api:int, total_db:int, sorted_api:int, sorted_db: int, missed_db:List[date], missed_api:List[date]) -> str:
-    #     """
-    #     Додає результат до черги запису у файл для 
-    #     """
-    #     task_id = str(uuid.uuid4())
-        
-    #     processing_data = {
-    #         "task_id": task_id,
-    #         "stock_code": stock_code,
-    #         "missed_db": missed_db,
-    #         "missed_api": missed_api,
-    #         "total_api": total_api,
-    #         "total_db": total_db,
-    #         "sorted_api": sorted_api,
-    #         "sorted_db": sorted_db
-    #     }
-        
-    #     # Додаємо завдання до черги обробки результатів
-    #     job = result_processing_queue.enqueue(
-    #         'app.workers.file_write_worker.process_file_write_task',
-    #         processing_data,
-    #         job_id=task_id
-    #     )
-        
-    #     return task_id
-    @staticmethod
-    def add_to_file_write_queue(stock_code: str, results_data, field_names) -> str:
-        """
-        Додає результат до другої черги (file_write)
-        """
-        task_id = str(uuid.uuid4())
-        
-        processing_data = {
-            "task_id": task_id,
-            "stock_code": stock_code,
-            "results_data": results_data,
-            "field_names": field_names,
-        }
-        
-        # Додаємо завдання до черги обробки результатів
-        job = result_processing_queue.enqueue(
-            'app.workers.file_write_worker.process_file_write_task',
-            processing_data,
-            job_id=task_id
-        )
+        client = QueueService.get_redis_client()
+        client.rpush(QueueService.FILE_WRITE_QUEUE, json.dumps(task_data))
+        logger.info(f"Added task {task_id} to file write queue: stock={stock_code}, genome={genome_id}")
         
         return task_id
     
-    
-
     @staticmethod
-    def get_queue_status():
-        """
-        Повертає статус черг
-        """
-        return {
-            "algorithm_calculation_queue": {
-                "pending_jobs": len(algorithm_calculation_queue),
-                "failed_jobs": len(algorithm_calculation_queue.failed_job_registry),
-                "completed_jobs": len(algorithm_calculation_queue.completed_job_registry)
-            },
-            "result_processing_queue": {
-                "pending_jobs": len(result_processing_queue),
-                "failed_jobs": len(result_processing_queue.failed_job_registry),
-                "completed_jobs": len(result_processing_queue.completed_job_registry)
+    def get_from_queue(queue_name: str, timeout: int = 0) -> Optional[Dict[str, Any]]:
+        """Get a task from the specified queue."""
+        client = QueueService.get_redis_client()
+        
+        if timeout > 0:
+            result = client.blpop(queue_name, timeout=timeout)
+            if result:
+                _, data = result
+                return json.loads(data)
+        else:
+            data = client.lpop(queue_name)
+            if data:
+                return json.loads(data)
+        
+        return None
+    
+    @staticmethod
+    def get_queue_length(queue_name: str) -> int:
+        """Get the number of tasks in a queue."""
+        client = QueueService.get_redis_client()
+        return client.llen(queue_name)
+    
+    @staticmethod
+    def add_batch_to_algorithm_queue(
+        tasks: List[Dict[str, Any]]
+    ) -> List[str]:
+        """Add multiple tasks to the algorithm queue efficiently."""
+        from app.workers.algorithm_worker import process_algorithm_task
+        
+        queue = QueueService.get_algorithm_queue()
+        job_ids = []
+        
+        for task in tasks:
+            task_data = {
+                "task_id": str(uuid.uuid4()),
+                "stock": task.get("stock"),
+                "genome_id": task.get("genome_id", "G_000"),
+                "parameters": task.get("parameters", {}),
+                "optimization_id": task.get("optimization_id"),
+                "created_at": datetime.now().isoformat(),
             }
-        }
+            job = queue.enqueue(process_algorithm_task, task_data)
+            job_ids.append(job.id)
+        
+        logger.info(f"Added {len(job_ids)} tasks to algorithm queue in batch")
+        
+        return job_ids

@@ -28,11 +28,15 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_DIR=/app/logs
       - LOG_JSON=${LOG_JSON:-false}
+      - GOOGLE_SHEETS_CREDENTIALS_PATH=/app/credentials/google_sheets.json
+      - INPUT_SHEET_ID=${INPUT_SHEET_ID:-}
+      - OUTPUT_SHEET_ID=${OUTPUT_SHEET_ID:-}
     volumes:
       - ./app:/app/app
       - ./logs:/app/logs
       - ./workers:/app/workers
       - ./data:/app/data
+      - ./credentials:/app/credentials:ro
     depends_on:
       - redis
     restart: unless-stopped

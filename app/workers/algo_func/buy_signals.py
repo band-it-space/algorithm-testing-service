@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import logging
 from datetime import datetime
 
+from app.models.algorithm_models import AlgorithmParameters
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -63,13 +65,18 @@ def bollinger_bands(values: List[float], period: int, std_dev: float) -> List[Di
         })
     return result
 
-def condition8_b18(closes: list[float]) -> bool:
+def mean(arr: List[float]) -> float:
+    return sum(arr) / len(arr) if arr else 0.0
 
-    input_BBW_len = 21  
+def condition8_b18(closes: list[float], params: AlgorithmParameters = None) -> bool:
+    if params is None:
+        params = AlgorithmParameters()
+
+    input_BBW_len = params.input_B18_bbw_len  # was 21
     input_BBW_SD = 2.0  
-    input_B18_Z = 21     
-    input_B18_Y = 82     
-    input_B18_X = 22.0   
+    input_B18_Z = params.input_B18_Z  # was 21
+    input_B18_Y = params.input_B18_history  # was 82
+    input_B18_X = params.input_B18_bbw_ratio * 100  # was 15.0
 
     if len(closes) < input_BBW_len + input_B18_Z + input_B18_Y:
         return False
@@ -133,47 +140,51 @@ def atr(highs, lows, closes, period):
 
     return atr_values
 
-def mean(arr: List[float]) -> float:
-    return sum(arr) / len(arr) if arr else 0.0
 
-
-#TODO B1 ++
-def checkB1(ohlcv: List[OHLCV], targetDate) -> bool:
-    if len(ohlcv) < 51:
+def checkB1(ohlcv: List[OHLCV], targetDate, params: AlgorithmParameters = None) -> bool:
+    if params is None:
+        params = AlgorithmParameters()
+    
+    lookback = params.input_B1_lookback  # was 20
+    bb_len = params.input_B1_bb_len  # was 51
+    bb_std = params.input_B1_bb_std  # was 1.9
+    ma_dev = params.input_B1_ma_dev  # was 0.25
+    upper_range = params.input_B1_upper_range  # was 0.75
+    
+    if len(ohlcv) < bb_len:
         return False
     logger.info(f"Day - {targetDate}")
     closes = [bar.close for bar in ohlcv]
     highs = [bar.high for bar in ohlcv]
     last = ohlcv[-1]
 
-    if len(ohlcv) < 21:
+    if len(ohlcv) < lookback + 1:
         return False
-    prev20High = max(highs[-21:-1])
-    condNew20DHigh = last.high > prev20High
+    prev_high = max(highs[-(lookback + 1):-1])
+    condNew20DHigh = last.high > prev_high
 
-    bb = bollinger_bands(closes, 51, 1.9)
-    sma51 = sma(closes, 51)
+    bb = bollinger_bands(closes, bb_len, bb_std)
+    sma_vals = sma(closes, bb_len)
 
     condBB = False
-    if bb and sma51:
+    if bb and sma_vals:
         lastBB = bb[-1]
-        lastSMA51 = sma51[-1]
-        logger.info(f"MA - {lastSMA51})")
-        if lastBB and lastSMA51:
-            deviation = (last.close - lastSMA51) / lastSMA51
-            logger.info(f"clode: {last.close} lastSMA51: {lastSMA51}")
-            condBB = last.close > lastBB['upper'] and deviation < 0.25
+        lastSMA = sma_vals[-1]
+        logger.info(f"MA - {lastSMA})")
+        if lastBB and lastSMA:
+            deviation = (last.close - lastSMA) / lastSMA
+            logger.info(f"clode: {last.close} lastSMA51: {lastSMA}")
+            condBB = last.close > lastBB['upper'] and deviation < ma_dev
 
-    condCloseInUpperRange = last.close > last.low + 0.65 * (last.high - last.low)
+    condCloseInUpperRange = last.close > last.low + upper_range * (last.high - last.low)
     
     logger.info(f"last.low: {last.low}, last_h: {last.high} last.close: {last.close}")
 
-
-    logger.info(f"B1 Conditions - NewHigh: {condNew20DHigh}, last: {last.high} prev20High: {prev20High}  Bollinger: {condBB}, CloseInUpperRange: {condCloseInUpperRange}")
+    logger.info(f"B1 Conditions - NewHigh: {condNew20DHigh}, last: {last.high} prev20High: {prev_high}  Bollinger: {condBB}, CloseInUpperRange: {condCloseInUpperRange}")
 
     return ((condNew20DHigh or condBB) and condCloseInUpperRange)
 
-#TODO B3 ++
+
 def linear_reg_value_mc(series: List[float], length: int, tgt_bar: int) -> float:
     if length <= 0 or len(series) < length:
         return 0.0
@@ -210,16 +221,20 @@ def slope_sma_bbw_mc(sma_bbw: List[float], length: int) -> float:
 
     return slope1
 
-def checkB3(ohlcv: List[OHLCV]) -> bool:
-    SMA_BBW_LEN = 72
-    LR_LEN = 58
+def checkB3(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
+    if params is None:
+        params = AlgorithmParameters()
+    
+    SMA_BBW_LEN = params.input_B3_sma_bbw  # was 72
+    LR_LEN = params.input_B3_LR_lookback  # was 40
+    BBW_LEN = params.input_B3_bbw_len  # was 21
 
     if not ohlcv: 
         return False
 
     closes = [bar.close for bar in ohlcv]
 
-    bb = bollinger_bands(closes, 21, 2)
+    bb = bollinger_bands(closes, BBW_LEN, 2)
 
     if len(bb) < SMA_BBW_LEN + LR_LEN:
         return False
@@ -243,29 +258,42 @@ def checkB3(ohlcv: List[OHLCV]) -> bool:
 
     return slope < 0
 
-#TODO B8 ++
-def checkB8(ohlcv: List[OHLCV]) -> bool:
-    if len(ohlcv) < 270:
+
+def checkB8(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
+    if params is None:
+        params = AlgorithmParameters()
+    
+    recent_low_period = params.input_B8_recent_low  # was 46
+    past_low_period = params.input_B8_past_low  # was 270
+    
+    if len(ohlcv) < past_low_period:
         return False
 
     lows = [bar.low for bar in ohlcv]
 
-    recent46Low = min(lows[-46:])
+    recent_low = min(lows[-recent_low_period:])
+    
+    past_end = -recent_low_period - 1
+    past_start = -past_low_period
+    pastRange = lows[past_start:past_end]
+    pastMinRange = min(pastRange) if pastRange else float('inf')
 
-    pastRange = lows[-270:-47]
-    pastMinRange = min(pastRange)
+    return recent_low > pastMinRange
 
-    return recent46Low > pastMinRange
 
-#TODO B9 ++
-def checkB9(ohlcv: List[OHLCV]) -> bool:
-    if len(ohlcv) < 50:
+def checkB9(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
+    if params is None:
+        params = AlgorithmParameters()
+    
+    ma_len = params.input_B9_ma_len  # was 50
+    
+    if len(ohlcv) < ma_len:
         return False
 
-    last50 = ohlcv[-50:]
-    closes = [bar.close for bar in last50]
-    highs = [bar.high for bar in last50]
-    lows = [bar.low for bar in last50]
+    last_n = ohlcv[-ma_len:]
+    closes = [bar.close for bar in last_n]
+    highs = [bar.high for bar in last_n]
+    lows = [bar.low for bar in last_n]
 
     lastClose = closes[-1]
 
@@ -283,24 +311,24 @@ def checkB9(ohlcv: List[OHLCV]) -> bool:
     
     return not (condCloseBelowMid and condHighEarlierThanLow)
 
-#TODO B10 ++
-def checkB10(ohlcv: List[OHLCV]) -> bool:
-    if len(ohlcv) < 250:
+
+def checkB10(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
+    if params is None:
+        params = AlgorithmParameters()
+    
+    low_window = params.input_B10_low_window  # was 250
+    prox_days = params.input_B10_prox_days  # was 68
+    
+    if len(ohlcv) < low_window:
         return False
 
-    last250 = ohlcv[-250:]
-    lows = [bar.low for bar in last250]
+    last_n = ohlcv[-low_window:]
+    lows = [bar.low for bar in last_n]
 
     minLow = min(lows)
-    minIndex = lows.index(minLow)
 
-    return minLow not in lows[-68:]
+    return minLow not in lows[-prox_days:]
 
-
-    # daysSinceLow = len(last250) - 1 - minIndex
-
-    # return daysSinceLow > 68
-from typing import List
 
 def lewis_atr(highs: List[float], lows: List[float], closes: List[float], period: int) -> List[Optional[float]]:
     n = len(highs)
@@ -324,71 +352,86 @@ def lewis_atr(highs: List[float], lows: List[float], closes: List[float], period
 
     return atr_values
 
-def checkB11(ohlcv: List["OHLCV"]) -> bool:
+def checkB11(ohlcv: List["OHLCV"], params: AlgorithmParameters = None) -> bool:
+    if params is None:
+        params = AlgorithmParameters()
+    
+    atr_len = params.input_B11_atr_len  # was 22
+    history = params.input_B11_history  # was 126
+    atr_threshold = params.input_B11_atr_threshold  # was 0.87 (now 0.8 in original)
+    
     ohlcv = sorted(ohlcv, key=lambda x: to_ts(x.date))
     n = len(ohlcv)
 
-    if n < 148:
+    min_required = history + atr_len + 1
+    if n < min_required:
         return False
 
     highs = [b.high for b in ohlcv]
     lows  = [b.low for b in ohlcv]
     closes= [b.close for b in ohlcv]
 
-    atr = lewis_atr(highs, lows, closes, 22)
+    atr_vals = lewis_atr(highs, lows, closes, atr_len)
 
-    current = atr[-1]
+    current = atr_vals[-1]
     if current is None:
         return False
     
-    prev_window = atr[-127:-1]  # aligned to bars now
+    prev_window = atr_vals[-(history + 1):-1]
     prev_window = [x for x in prev_window if x is not None]
-    if len(prev_window) < 126:
+    if len(prev_window) < history:
         return False
 
     max_prev = max(prev_window)
 
-    # MC logic: if current > max_prev*0.87 => cancel => return False
-    return not (current > 0.87 * max_prev)
+    # MC logic: if current > max_prev * threshold => cancel => return False
+    return not (current > atr_threshold * max_prev)
 
-#TODO B12 ++
+
 def checkB12(
     ohlcv: List["OHLCV"],
-    input_B12_growth: float = 0.16,
-    input_B12_days: int = 50,
-    input_B12_deviation: float = 0.2
+    params: AlgorithmParameters = None
 ) -> bool:
-
+    if params is None:
+        params = AlgorithmParameters()
+    
+    long_ma = params.input_B12_long_ma  # was 150
+    growth = params.input_B12_rise_pct  # was 0.16
+    deviation = params.input_B12_deviation  # was 0.2
+    days = 50  # lookback for SMA comparison
 
     closes = [b.close for b in ohlcv]
     n = len(closes)
-    if n < 150 + input_B12_days:
+    if n < long_ma + days:
         return False
 
-    sma150 = sma(closes, 150)
-    warmup = 150 - 1
-    if not sma150 or len(sma150) != n - warmup:
+    sma_vals = sma(closes, long_ma)
+    warmup = long_ma - 1
+    if not sma_vals or len(sma_vals) != n - warmup:
         return False
 
-
-
-    sma_now = sma150[-1]
-    sma_past = sma150[-51]
+    sma_now = sma_vals[-1]
+    sma_past = sma_vals[-days - 1]
     if sma_now in (None, 0) or sma_past in (None, 0):
         return False
 
     sma_growth = (sma_now / sma_past) - 1.0
-    deviation = (ohlcv[-1].high / sma_now) - 1.0
+    dev = (ohlcv[-1].high / sma_now) - 1.0
 
-    return not ((sma_growth > input_B12_growth) and (deviation > input_B12_deviation))
+    return not ((sma_growth > growth) and (dev > deviation))
 
-#TODO B13 ++
+
 def checkB13(
     ohlcvStock: List[OHLCV],
     ohlcvIndex: List[OHLCV],
-    input_B13_XX: int = 19,
-    input_B13_YY: int = 60
+    params: AlgorithmParameters = None
 ) -> bool:
+    if params is None:
+        params = AlgorithmParameters()
+    
+    input_B13_XX = params.input_B13_XX  # was 19
+    input_B13_YY = params.input_B13_YY  # was 60
+    
     if not ohlcvStock or not ohlcvIndex:
         return False
     
@@ -403,11 +446,11 @@ def checkB13(
     s_today = stock[-1].close
     i_today = index[-1].close
 
-    s_x_ago = stock[-input_B13_XX -1].close
-    i_x_ago = index[-input_B13_XX -1].close
+    s_x_ago = stock[-input_B13_XX - 1].close
+    i_x_ago = index[-input_B13_XX - 1].close
 
-    s_y_ago = stock[-input_B13_YY -1].close
-    i_y_ago = index[-input_B13_YY -1].close
+    s_y_ago = stock[-input_B13_YY - 1].close
+    i_y_ago = index[-input_B13_YY - 1].close
 
     stock_ratio_x = s_today / s_x_ago
     index_ratio_x = i_today / i_x_ago
@@ -420,13 +463,14 @@ def checkB13(
     else: 
         return True
 
-#TODO B18
-def checkB18(ohlcv: List[OHLCV], targetDate: str) -> bool:
+
+def checkB18(ohlcv: List[OHLCV], targetDate: str, params: AlgorithmParameters = None) -> bool:
+    if params is None:
+        params = AlgorithmParameters()
+    
     if not ohlcv or len(ohlcv) < 250:
         logger.info(f"Insufficient data for {targetDate}. Length of ohlcv: {len(ohlcv)}")
         return False
-    
-    
 
     closes = [bar.close for bar in ohlcv]
     highs = [bar.high for bar in ohlcv]
@@ -439,7 +483,6 @@ def checkB18(ohlcv: List[OHLCV], targetDate: str) -> bool:
     sma150 = sma(closes, 150)
     sma200 = sma(closes, 200)
 
-    # Check if the SMAs were calculated properly
     if not sma50 or not sma150 or not sma200:
         logger.info(f"Failed to calculate required SMAs on {targetDate}")
         return False
@@ -448,50 +491,29 @@ def checkB18(ohlcv: List[OHLCV], targetDate: str) -> bool:
     lastSMA150 = sma150[-1]
     lastSMA200 = sma200[-1]
 
-    # Condition 1: Check if last close is above both SMA150 and SMA200
     cond1 = lastClose > lastSMA150 and lastClose > lastSMA200
-
-    # Condition 2: Check if SMA150 > SMA200
     cond2 = lastSMA150 > lastSMA200
 
-    # Ensure we have enough data for the 200-period SMA
     if len(sma200) < 22:
         logger.info(f"Not enough data for SMA200 on {targetDate}")
         return False
 
     sma200_21d_ago = sma200[-21]
-    # Condition 3: Check if last SMA200 is greater than SMA200 21 days ago
     cond3 = lastSMA200 > sma200_21d_ago
-
-    # Condition 4: Check if last SMA50 > both SMA150 and SMA200
     cond4 = lastSMA50 > lastSMA150 and lastSMA50 > lastSMA200
-
-    # Condition 5: Check if last close is above SMA50
     cond5 = lastClose > lastSMA50
 
-    # Condition 6: Check if last close is greater than 30% above the 250-day low
     last250Low = min(lows[-250:])
     cond6 = lastClose > last250Low * 1.30
 
-
-    # Condition 7: Check if last close is greater than 75% of the 250-day high
     last250High = max(highs[-250:])
     cond7 = lastClose > last250High * 0.75
 
-    # Calculate Bollinger Bands for the last 21 and 82 days
-    
+    cond8 = condition8_b18(closes, params)
 
-
-    cond8 = condition8_b18(closes)
-
-    # logger.info(f"Final B18 Conditions for {targetDate}: "
-    #     f"cond1: {cond1}, cond2: {cond2}, cond3: {cond3}, cond4: {cond4}, "
-    #     f"cond5: {cond5}, cond6: {cond6}, cond7: {cond7}, cond8: {cond8}")
-
-    # Return the final result based on all conditions
     return cond1 and cond2 and cond3 and cond4 and cond5 and cond6 and cond7 and cond8
 
-#TODO Stop Loss
+
 def wilder_atr(highs: List[float], lows: List[float], closes: List[float], period: int) -> List[float]:
     if len(highs) < period + 1:
         return []
@@ -515,8 +537,18 @@ def wilder_atr(highs: List[float], lows: List[float], closes: List[float], perio
 
     return atr_values
 
-def calcS1Stop(ohlcv: List[OHLCV], factor: float = 3.7, atrPeriod: int = 22, 
+def calcS1Stop(ohlcv: List[OHLCV], params: AlgorithmParameters = None,
                entryClose: Optional[float] = None) -> float:
+    if params is None:
+        params = AlgorithmParameters()
+    
+    factor = params.input_S1_atr_mult  # was 3.7
+    atrPeriod = params.input_S1_atr_period  # was 22
+    hard_stop = params.input_S1_hard_stop  # was 0.30
+    medium_risk = params.input_S1_medium_risk  # was 0.20
+    medium_stop = params.input_S1_medium_stop  # was 0.095
+    high_stop = params.input_S1_high_stop  # was 0.1425
+    
     if not ohlcv or len(ohlcv) < atrPeriod + 1:
         return float('nan')
 
@@ -537,24 +569,28 @@ def calcS1Stop(ohlcv: List[OHLCV], factor: float = 3.7, atrPeriod: int = 22,
 
     riskFrac = (close - baseStop) / close  
 
-    if riskFrac > 0.30:
-        return round(close * (1 - 0.1425), 4)  
-    if riskFrac > 0.20:
-        return round(close * (1 - 0.095), 4)   
+    if riskFrac > hard_stop:
+        return round(close * (1 - high_stop), 4)  
+    if riskFrac > medium_risk:
+        return round(close * (1 - medium_stop), 4)   
     return round(baseStop, 4)
 
-def runAllBuyConditions(ohlcv: List[OHLCV], targetDate: str, spyData: List[OHLCV]) -> Dict[str, Union[bool, float]]:
+def runAllBuyConditions(ohlcv: List[OHLCV], targetDate: str, spyData: List[OHLCV], 
+                        params: AlgorithmParameters = None) -> Dict[str, Union[bool, float]]:
+    if params is None:
+        params = AlgorithmParameters()
+    
     return {
-        'B1':  checkB1(ohlcv, targetDate),
-        'B3':  checkB3(ohlcv),
-        'B8':  checkB8(ohlcv),
-        'B9':  checkB9(ohlcv),
-        'B10': checkB10(ohlcv),
-        'B11': checkB11(ohlcv),
-        'B12': checkB12(ohlcv),
-        'B13': checkB13(ohlcv, spyData),
-        'B18': checkB18(ohlcv, targetDate),
-        'stopLoss': calcS1Stop(ohlcv)
+        'B1':  checkB1(ohlcv, targetDate, params),
+        'B3':  checkB3(ohlcv, params),
+        'B8':  checkB8(ohlcv, params),
+        'B9':  checkB9(ohlcv, params),
+        'B10': checkB10(ohlcv, params),
+        'B11': checkB11(ohlcv, params),
+        'B12': checkB12(ohlcv, params),
+        'B13': checkB13(ohlcv, spyData, params),
+        'B18': checkB18(ohlcv, targetDate, params),
+        'stopLoss': calcS1Stop(ohlcv, params)
     }
 
 def isBuy(signals: Dict[str, Union[bool, float]]) -> bool:

@@ -1,6 +1,5 @@
 from app.services.get_all_stoccks import get_stocks_codes
 from fastapi import APIRouter, HTTPException
-from app.models.algorithm_models import AlgorithmRequest, AlgorithmResponse
 from app.services.queue_service import QueueService
 from app.services.file_service import FileService
 algorithm_router = APIRouter()

@@ -7,12 +7,18 @@ import csv
 import pandas as pd
 
 from app.services.file_service import FileService
-from app.models.algorithm_models import UnifiedTradeSignal
+from app.models.algorithm_models import UnifiedTradeSignal, AlgorithmParameters
 from app.services.queue_service import QueueService
+from app.services.results_aggregation_service import (
+    calculate_genome_metrics,
+    format_results_for_output,
+    get_output_fieldnames,
+)
 
 # --- CONFIGURATION ---
 FIXED_DEPOSIT_AMOUNT = 10000.0
 GENERAL_RESULTS_FILE = "general_results"
+OPTIMIZATION_RESULTS_FILE = "optimization_results"
 
 class ErrorResponse(TypedDict):
     error: str
@@ -43,11 +49,18 @@ def _to_float_or_open(value) -> Union[float, str]:
     except Exception:
         return "Open position"
 
-async def save_financial_results(stock_code: str, algo_data: List[Dict[str, Any]], file_service: FileService):
+async def save_financial_results(
+    stock_code: str, 
+    algo_data: List[Dict[str, Any]], 
+    file_service: FileService,
+    genome_id: str = "G_000",
+    parameters: Optional[Dict[str, Any]] = None
+):
+    """Save financial results including genome information."""
     if not algo_data:
         return
-    df = pd.DataFrame(algo_data)
     
+    df = pd.DataFrame(algo_data)
     mapped_rows = []
     
     for _, row in df.iterrows():
@@ -72,9 +85,9 @@ async def save_financial_results(stock_code: str, algo_data: List[Dict[str, Any]
         else:
             exit_day_val = stop_signal_val
 
-        # 4. Формування запису
         record = {
             "symbol": stock_code,
+            "genome_id": genome_id,
             "entryDay": row.get("Buy Signal", ""),
             "entryPrice": row.get("Entry price", ""),
             "exitDay": exit_day_val,
@@ -89,13 +102,58 @@ async def save_financial_results(stock_code: str, algo_data: List[Dict[str, Any]
         return
 
     fieldnames = [
-        "symbol", "entryDay", "entryPrice", 
+        "symbol", "genome_id", "entryDay", "entryPrice", 
         "exitDay", "exitPrice", 
         "profit", "Profit %", "Invested"
     ]
     
     await file_service.add_data_to_csv(GENERAL_RESULTS_FILE, mapped_rows, fieldnames)
 
+
+async def save_genome_optimization_results(
+    stock_code: str,
+    algo_data: List[Dict[str, Any]],
+    genome_id: str,
+    parameters: Dict[str, Any],
+    optimization_id: Optional[str] = None
+):
+    """
+    Calculate and save optimization results for a genome.
+    Matches Output Results Sample.csv format.
+    """
+    if not algo_data:
+        logger.warning(f"No algo data for {stock_code}/{genome_id}")
+        return None
+    
+    # Calculate metrics for this genome
+    result = calculate_genome_metrics(
+        trades=algo_data,
+        genome_id=genome_id,
+        stock_code=stock_code,
+        parameters=parameters
+    )
+    
+    # Format for output
+    output_row = result.to_output_row()
+    
+    # Add optimization_id if present
+    if optimization_id:
+        output_row["optimization_id"] = optimization_id
+    
+    # Save to optimization results file
+    fieldnames = get_output_fieldnames()
+    if optimization_id:
+        fieldnames = ["optimization_id"] + fieldnames
+    
+    await file_service.add_data_to_csv(
+        OPTIMIZATION_RESULTS_FILE,
+        [output_row],
+        fieldnames
+    )
+    
+    logger.info(f"Saved optimization result for {genome_id}/{stock_code}: {result.trade_count} trades, profit: {result.profit_percent:.2f}%")
+    
+    return result
 
 
 async def load_server_data(stock_code:str) -> Union[Tuple[List[UnifiedTradeSignal], List[Optional[datetime]]], ErrorResponse]:
@@ -171,7 +229,6 @@ async def load_server_data(stock_code:str) -> Union[Tuple[List[UnifiedTradeSigna
                         logger.error(f"Error building unified trade signal: {e}")
                     current_position = None 
                 else:
-                    # Closing a position without known entry (in this range)
                     try:
                         stop_ts = day.get("tradeday")
                         prev_sell = day.get("prev_tradeday")
@@ -253,24 +310,50 @@ def convert_csv_to_unified(csv_row: dict) -> UnifiedTradeSignal:
         logger.error(f"Error converting CSV signal: {e}")
         raise
 
+
 async def process_result_task(processing_data):
     """
     Result Processing Worker (Second Stage)
+    Updated to support genome_id and parameters.
     """
     try:
-        logger.info(f"Starting processing data for stock_code: {processing_data['stock_code']}")
-        stock_code = processing_data['stock_code']
+        stock_code = processing_data.get('stock_code') or processing_data.get('stock')
+        genome_id = processing_data.get('genome_id', 'G_000')
+        parameters = processing_data.get('parameters', {})
+        optimization_id = processing_data.get('optimization_id')
+        
+        logger.info(f"Starting processing data for stock_code: {stock_code}, genome: {genome_id}")
 
-        api_result = await load_server_data(stock_code)
-
+        # Load algorithm results from CSV
         new_algo_data = await file_service.read_data_from_csv(stock_code)
         logger.info(f"Loaded {len(new_algo_data) if new_algo_data else 0} algorithm signals from CSV for stock {stock_code}")
 
         if new_algo_data:
             try:
-                await save_financial_results(stock_code, new_algo_data, file_service)
+                # Save standard financial results
+                await save_financial_results(
+                    stock_code, 
+                    new_algo_data, 
+                    file_service,
+                    genome_id=genome_id,
+                    parameters=parameters
+                )
+                
+                # If this is part of an optimization, save genome-specific results
+                if optimization_id or genome_id != "G_000":
+                    await save_genome_optimization_results(
+                        stock_code=stock_code,
+                        algo_data=new_algo_data,
+                        genome_id=genome_id,
+                        parameters=parameters,
+                        optimization_id=optimization_id
+                    )
+                    
             except Exception as e:
-                logger.error(f"Failed to save financial summary for {stock_code}: {e}")
+                logger.error(f"Failed to save financial summary for {stock_code}/{genome_id}: {e}")
+
+        # API comparison (existing logic)
+        api_result = await load_server_data(stock_code)
 
         if isinstance(api_result, dict):
             logger.error(f"API error for stock {stock_code}: {api_result}")
@@ -288,7 +371,7 @@ async def process_result_task(processing_data):
                 except Exception as e:
                     logger.error(f"Error converting CSV signal to unified: {e}")
 
-        # 4. Comparison Logic
+        # Comparison Logic
         match_count = 0
         deviations = 0
         deviations_data = []
@@ -308,33 +391,7 @@ async def process_result_task(processing_data):
                     found_match = True
                     break
                 
-                api_buy_index = None
-                csv_buy_index = None
-                if api_item.buy_signal and api_item.buy_signal in trade_days:
-                    api_buy_index = trade_days.index(api_item.buy_signal)
-                if csv_item.buy_signal and csv_item.buy_signal in trade_days:
-                    csv_buy_index = trade_days.index(csv_item.buy_signal)
-                
-                buy_match = False
-                if api_buy_index is not None and csv_buy_index is not None:
-                    if abs(api_buy_index - csv_buy_index) <= 2:
-                        buy_match = True
-
-                stop_match = False
-                if api_item.stop_signal == csv_item.stop_signal:
-                    stop_match = True
-                elif (api_item.stop_signal != "Open position" and csv_item.stop_signal != "Open position"):
-                    pass # Тут ваш код перевірки індексів Stop Signal
-                
-                # Це місце для вашої повної логіки перевірки deviations...
-                # Припустимо, логіка перевірки виконалася
-                # --- END OF MATCHING LOGIC BLOCK ---
-
-                # Відновлюємо ваш точний код порівняння для коректної роботи:
-                # (Вставте сюди повний блок while з вашого оригінального коду)
-                # Оскільки я пишу код повністю, ось він:
-                
-                # Перевірка buy_signal
+                # Check buy_signal with tolerance
                 api_buy_index = None
                 csv_buy_index = None
                     
@@ -356,9 +413,10 @@ async def process_result_task(processing_data):
                 else:
                     buy_match = False
 
-                # Перевірка stop_signal
+                # Check stop_signal with tolerance
                 api_stop_index = None
                 csv_stop_index = None
+                stop_match = False
                     
                 if (api_item.stop_signal and csv_item.stop_signal and 
                     api_item.stop_signal != "Open position" and csv_item.stop_signal != "Open position"):
@@ -382,8 +440,6 @@ async def process_result_task(processing_data):
 
                 elif api_item.stop_signal == csv_item.stop_signal:
                     stop_match = True
-                else:
-                    stop_match = False
                 
                 if buy_match and not exact_buy and stop_match and not except_sell:
                     deviations += 2
@@ -400,10 +456,10 @@ async def process_result_task(processing_data):
                     deviations += 1
                     if stop_match and not except_sell:
                         deviations_data.append(f'Sell: Algo - {csv_item.stop_signal} / API - {api_item.stop_signal};')
-
                     if buy_match and not exact_buy: 
                         deviations_data.append(f'Buy: Algo - {csv_item.buy_signal} / API - {api_item.buy_signal};')
-                if ((exact_buy and  stop_match) or (except_sell and buy_match)):
+                        
+                if ((exact_buy and stop_match) or (except_sell and buy_match)):
                     unified_algo_data.pop(i)
                     found_match = True
                     break
@@ -413,9 +469,9 @@ async def process_result_task(processing_data):
             if not found_match:
                 unmatched_api_data.append(f'Buy:{api_item.buy_signal}, Sell:{api_item.stop_signal};')
 
-        # 5. Calculate Statistics
-        total_api_count = len(unified_api_data)*2
-        total_algo = len(new_algo_data)*2 if new_algo_data else 0
+        # Calculate Statistics
+        total_api_count = len(unified_api_data) * 2
+        total_algo = len(new_algo_data) * 2 if new_algo_data else 0
         total_unmatched = total_api_count - match_count - deviations
         total_signals_for_accuracy = max(total_api_count, total_algo)
         
@@ -424,14 +480,16 @@ async def process_result_task(processing_data):
         elif total_algo == 0 and total_api_count == 0:
             total_match_percent = 100.0
         else:
-             total_match_percent = 0.0
+            total_match_percent = 0.0
 
-        logger.info("------------------------------" )
-        logger.info(f"Stock: {stock_code} processed. Match: {total_match_percent}%")
+        logger.info("------------------------------")
+        logger.info(f"Stock: {stock_code}, Genome: {genome_id} processed. Match: {total_match_percent}%")
 
-        # 6. Push Comparison Results to Queue
+        # Push Comparison Results to Queue
         results_data = [{
             'stock_code': stock_code,
+            'genome_id': genome_id,
+            'optimization_id': optimization_id or '',
             'timestamp': datetime.now().isoformat(),
             'total_api': f'{total_api_count}',
             'total_algo': f'{total_algo}',
@@ -446,14 +504,37 @@ async def process_result_task(processing_data):
             'match_percent': f'{total_match_percent}'
         }]
         
-        field_names = ['stock_code', 'timestamp', 'total_api','total_algo', 'total_exact', 'total_unmatched', 'with_deviation', 'deviations_data', 'unmatched_api', 'unmatched_api_data', 'unmatched_algo', 'unmatched_algo_data', 'match_percent' ]
+        field_names = [
+            'stock_code', 'genome_id', 'optimization_id', 'timestamp', 
+            'total_api', 'total_algo', 'total_exact', 'total_unmatched', 
+            'with_deviation', 'deviations_data', 'unmatched_api', 
+            'unmatched_api_data', 'unmatched_algo', 'unmatched_algo_data', 
+            'match_percent'
+        ]
         
-        QueueService.add_to_file_write_queue(stock_code, results_data, field_names)
-        logger.info(f"File write task queued for stock: {stock_code}")
+        QueueService.add_to_file_write_queue(
+            stock_code, 
+            genome_id=genome_id,
+            data={
+                'results_data': results_data,
+                'field_names': field_names,
+                'optimization_id': optimization_id
+            }
+        )
+        logger.info(f"File write task queued for stock: {stock_code}, genome: {genome_id}")
+
+        # Update optimization progress if applicable
+        if optimization_id:
+            try:
+                from app.services.optimization_service import OptimizationService
+                OptimizationService.increment_completed_tasks(optimization_id)
+            except Exception as e:
+                logger.error(f"Failed to update optimization progress: {e}")
 
         return {
             "final_result": {
                 "stock_code": stock_code,
+                "genome_id": genome_id,
                 "status": "Success",
                 "match_percent": total_match_percent
             },
@@ -461,4 +542,14 @@ async def process_result_task(processing_data):
         
     except Exception as e:
         logger.error(f"Error processing result task {processing_data.get('task_id', 'unknown')}: {str(e)}")
+        
+        # Update failed task count if part of optimization
+        optimization_id = processing_data.get('optimization_id')
+        if optimization_id:
+            try:
+                from app.services.optimization_service import OptimizationService
+                OptimizationService.increment_failed_tasks(optimization_id)
+            except Exception:
+                pass
+        
         raise e
