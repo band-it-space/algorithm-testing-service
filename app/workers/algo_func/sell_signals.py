@@ -116,7 +116,7 @@ def s4(ohlcv, buy_date, buy_price, params: AlgorithmParameters = None):
     ratio_threshold = params.input_S4_ratio_threshold  # was 0.5
     gain_threshold = params.input_S4_gain_threshold  # was 5.0
     
-    data = sorted(ohlcv, key=lambda x: to_ts(x.date))
+    data = ohlcv
     min_required = sma_period + max_days
     if len(data) < min_required:
         return False
@@ -219,7 +219,7 @@ def fibo_exit_stop(
     level: float,
     yy_days: int
 ) -> bool:
-    data = sorted(ohlcv, key=lambda x: to_ts(x.date))
+    data = ohlcv
     n = len(data)
 
     if n < 250:
@@ -289,7 +289,7 @@ def s6(ohlcv, buy_date, trade_date, params: AlgorithmParameters = None):
     high_window = params.input_S6_high_window  # was 90
     days_threshold = params.input_S6_days_threshold  # was 76
     
-    data = sorted(ohlcv, key=lambda x: to_ts(x.date))
+    data = ohlcv
 
     if len(data) < high_window + 10:
         logger.info(f"S6: not enough data ({len(data)} rows). Exit=False")
@@ -352,7 +352,7 @@ def s7(ohlcv, buy_date, buy_price, params: AlgorithmParameters = None):
     atr_period = params.input_S7_atr_period  # was 22
     body_mult = params.input_S7_body_mult  # was 2.0
     
-    data = sorted(ohlcv, key=lambda x: to_ts(x.date))
+    data = ohlcv
     n = len(data)
     if n < atr_period + 2:
         return False
@@ -390,7 +390,7 @@ def s8(ohlcv, buy_date, buy_price, params: AlgorithmParameters = None):
     body_mult = params.input_S8_body_mult  # was 2.4
     bear_count = params.input_S8_bear_count  # was 3
     
-    data = sorted(ohlcv, key=lambda x: to_ts(x.date))
+    data = ohlcv
     n = len(data)
 
     if n < 148:
@@ -421,14 +421,16 @@ def s8(ohlcv, buy_date, buy_price, params: AlgorithmParameters = None):
 
     return count_bear_huge >= bear_count
 
-def s9(trade_date, ohlcv, spy_data, params: AlgorithmParameters = None):
+def s9(trade_date, ohlcv, spy_data, params: AlgorithmParameters = None, energy_data=None):
     if params is None:
         params = AlgorithmParameters()
     
     energy_thresh = params.input_S9_energy_thresh  # was 0.22
-    
-    energy_level = calculate_energy_indicators_last_16_days(trade_date, ohlcv, spy_data)
-    return energy_level["energy_score"] < energy_thresh
+
+    if energy_data is None:
+        energy_data = calculate_energy_indicators_last_16_days(trade_date, ohlcv, spy_data)
+
+    return energy_data["energy_score"] < energy_thresh
 
 def s10(ohlcv, buy_date, buy_price, params: AlgorithmParameters = None):
     if params is None:
@@ -437,7 +439,7 @@ def s10(ohlcv, buy_date, buy_price, params: AlgorithmParameters = None):
     atr_ratio = params.input_S10_atr_ratio  # was 2.6
     drawdown = params.input_S10_drawdown  # was 0.05
     
-    data = sorted(ohlcv, key=lambda x: to_ts(x.date))
+    data = ohlcv
     n = len(data)
 
     if n < 101:
@@ -499,7 +501,7 @@ def s13(ohlcv, buy_date, buy_price, params: AlgorithmParameters = None):
     min_days = params.input_S13_min_days  # was 238
     lookback = params.input_S13_lookback  # was 80
     
-    data = sorted(ohlcv, key=lambda x: to_ts(x.date))
+    data = ohlcv
     n = len(data)
     if n < lookback + 1:
         return False
@@ -531,15 +533,15 @@ def s13(ohlcv, buy_date, buy_price, params: AlgorithmParameters = None):
 
     return last_close < min_close_n
 
-def s14(ohlcv, hsi_ohlcv, buy_date, buy_price, params: AlgorithmParameters = None):
+def s14(ohlcv, spy_data, buy_date, buy_price, params: AlgorithmParameters = None):
     if params is None:
         params = AlgorithmParameters()
     
     min_days = params.input_S14_min_days  # was 300
     horizons = params.input_S14_horizons  # was [35, 70, 105]
     
-    asset = sorted(ohlcv, key=lambda x: to_ts(x.date))
-    hsi = sorted(hsi_ohlcv, key=lambda x: to_ts(x.date))
+    asset = ohlcv
+    hsi = spy_data
 
     max_horizon = max(horizons) + 1
     if len(asset) < max_horizon or len(hsi) < max_horizon:
@@ -594,7 +596,7 @@ def s15(ohlcv, buy_date, buy_price, params: AlgorithmParameters = None):
     crash_drop = params.input_S15_crash_drop  # was 0.25
     lookback = params.input_S15_lookback  # was 4
     
-    data = sorted(ohlcv, key=lambda x: to_ts(x.date))
+    data = ohlcv
     n = len(data)
 
     if n < lookback + 1:
@@ -624,7 +626,7 @@ def s16(
     s16_atr_day = params.input_S16_atr_day  # was 12
     atr_period = 22
     
-    data = sorted(ohlcv, key=lambda x: to_ts(x.date))
+    data = ohlcv
     n = len(data)
     if n < atr_period + s16_yy + s16_atr_day + 1:
         return False
@@ -681,7 +683,7 @@ def s17(ohlcv, buy_date, buy_price, params: AlgorithmParameters = None):
     wide_range = params.input_S17_wide_range  # was 1.6
     near_bottom = params.input_S17_near_bottom  # was 1.3
     
-    data = sorted(ohlcv, key=lambda x: to_ts(x.date))
+    data = ohlcv
     n = len(data)
 
     if n < min_days:
@@ -724,30 +726,48 @@ def s17(ohlcv, buy_date, buy_price, params: AlgorithmParameters = None):
     return is_near_bottom
 
 
-def runAllSellConditions(ohlcv, spy_data, buy_date, buy_price, stop_loss, trade_date, 
-                         params: AlgorithmParameters = None):
+def runAllSellConditions(ohlcv, spy_data, buy_date, buy_price, stop_loss, trade_date,
+                         params: AlgorithmParameters = None, energy_data=None):
     if params is None:
         params = AlgorithmParameters()
-    
+
+    # Safety: verify data is sorted (O(1) check)
+    if len(ohlcv) >= 2:
+        assert ohlcv[0].date <= ohlcv[-1].date, \
+            f"OHLCV not sorted: first={ohlcv[0].date}, last={ohlcv[-1].date}"
+
+    # S5 MUST always run — it returns the updated stop_loss value
     s5_exit, new_stop = s5(ohlcv, buy_date, buy_price, stop_loss, trade_date, params)
 
-    conditions = {
-        "S1": exit_by_stop_loss(ohlcv, stop_loss, params),
-        "S4": s4(ohlcv, buy_date, buy_price, params),
-        "S5": s5_exit,
-        "S6": s6(ohlcv, buy_date, trade_date, params),
-        "S7": s7(ohlcv, buy_date, buy_price, params),
-        "S8": s8(ohlcv, buy_date, buy_price, params),
-        "S9": s9(trade_date, ohlcv, spy_data, params),
-        "S10": s10(ohlcv, buy_date, buy_price, params),
-        "S11": s11(ohlcv, buy_date, buy_price, params),
-        "S12": s12(ohlcv, buy_date, buy_price, params),
-        "S13": s13(ohlcv, buy_date, buy_price, params),
-        "S14": s14(ohlcv, spy_data, buy_date, buy_price, params),
-        "S15": s15(ohlcv, buy_date, buy_price, params),
-        "S16": s16(ohlcv, buy_date, params),
-        "S17": s17(ohlcv, buy_date, buy_price, params),
-    }
+    # Ordered cheapest-to-most-expensive for early exit
+    ordered_checks = [
+        ("S1",  lambda: exit_by_stop_loss(ohlcv, stop_loss, params)),
+        ("S15", lambda: s15(ohlcv, buy_date, buy_price, params)),
+        ("S5",  lambda: s5_exit),
+        ("S7",  lambda: s7(ohlcv, buy_date, buy_price, params)),
+        ("S9",  lambda: s9(trade_date, ohlcv, spy_data, params, energy_data=energy_data)),
+        ("S17", lambda: s17(ohlcv, buy_date, buy_price, params)),
+        ("S13", lambda: s13(ohlcv, buy_date, buy_price, params)),
+        ("S10", lambda: s10(ohlcv, buy_date, buy_price, params)),
+        ("S8",  lambda: s8(ohlcv, buy_date, buy_price, params)),
+        ("S6",  lambda: s6(ohlcv, buy_date, trade_date, params)),
+        ("S4",  lambda: s4(ohlcv, buy_date, buy_price, params)),
+        ("S16", lambda: s16(ohlcv, buy_date, params)),
+        ("S11", lambda: s11(ohlcv, buy_date, buy_price, params)),
+        ("S12", lambda: s12(ohlcv, buy_date, buy_price, params)),
+        ("S14", lambda: s14(ohlcv, spy_data, buy_date, buy_price, params)),
+    ]
+
+    conditions = {}
+    for key, check_fn in ordered_checks:
+        result = check_fn()
+        conditions[key] = result
+        if result:
+            # Fill remaining conditions as False (not evaluated)
+            for remaining_key, _ in ordered_checks:
+                if remaining_key not in conditions:
+                    conditions[remaining_key] = False
+            break
 
     return {"conditions": conditions, "stop_loss": new_stop}
 

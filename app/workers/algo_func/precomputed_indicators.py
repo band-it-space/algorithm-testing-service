@@ -13,6 +13,7 @@ Author: Optimization Task
 """
 import numpy as np
 import pandas as pd
+from bisect import bisect_right
 from typing import List, Dict, Optional, Any, NamedTuple, Tuple
 from dataclasses import dataclass, field
 import logging
@@ -107,6 +108,7 @@ class PrecomputedIndicators:
         
         # B18 indicators (need all 8 conditions)
         self.bbw_b18: Optional[np.ndarray] = None
+        self.sma_bbw_b18: Optional[np.ndarray] = None
         self.bb_b18_upper: Optional[np.ndarray] = None
         self.sma_50: Optional[np.ndarray] = None
         self.sma_150: Optional[np.ndarray] = None
@@ -199,8 +201,11 @@ class PrecomputedIndicators:
         )
         self.bbw_b18 = self._calc_bbw(bb18_upper, bb18_lower, bb18_middle)
         
-        # B18 price BB (different period)
+        # SMA of BBW for B18 condition 8 (matches original condition8_b18 which uses mean(recent_bbw[-Z:]))
         b18_z = getattr(p, 'input_B18_Z', 10)
+        self.sma_bbw_b18 = self._sma_full(self.bbw_b18, b18_z)
+        
+        # B18 price BB (different period)
         bb18p_upper, _, _ = self._bollinger_bands_full(self.closes, b18_z, 2.0)
         self.bb_b18_upper = bb18p_upper
         
@@ -299,12 +304,19 @@ class PrecomputedIndicators:
         period: int, 
         offset: int
     ) -> np.ndarray:
-        """Calculate rolling minimum with offset (for B8 past range)."""
+        """Calculate rolling minimum with offset (for B8 past range).
+        
+        Matches original checkB8 logic:
+            lows[-past_low : -recent_low - 1]
+        which at index idx translates to:
+            lows[idx - past_low + 1 : idx - recent_low]
+        where period = past_low - recent_low, offset = recent_low.
+        """
         n = len(values)
         result = np.full(n, np.nan)
         
-        for i in range(offset + period, n):
-            window = values[i - offset - period:i - offset]
+        for i in range(offset + period - 1, n):
+            window = values[i - offset - period + 1:i - offset]
             if len(window) > 0:
                 result[i] = np.min(window)
         
@@ -504,22 +516,45 @@ class PrecomputedIndicators:
         """Calculate price ratios for stock and index over period.
         
         Returns (stock_ratio, index_ratio) where ratio = today / period_ago.
+        
+        Original checkB13 uses stock[-XX-1] and index[-XX-1] independently,
+        looking back XX bars in each series' own calendar. Stock and SPY
+        have different bar counts and trading calendars, so we must align
+        by date, then look back XX bars in each series separately.
         """
         n = len(closes)
+        n_spy = len(spy_closes)
         stock_ratio = np.full(n, np.nan)
         index_ratio = np.full(n, np.nan)
         
-        if len(spy_closes) < n:
+        if n_spy == 0:
             return stock_ratio, index_ratio
         
+        # Build date-aligned SPY index mapping: stock index → SPY index
+        spy_date_to_idx = {bar.date: j for j, bar in enumerate(self.spy_data)}
+        spy_dates_sorted = [bar.date for bar in self.spy_data]
+        
+        spy_idx_for_stock = np.full(n, -1, dtype=np.intp)
+        for i in range(n):
+            stock_date = self.dates[i]
+            if stock_date in spy_date_to_idx:
+                spy_idx_for_stock[i] = spy_date_to_idx[stock_date]
+            else:
+                # Binary search for last SPY date <= stock_date
+                j = bisect_right(spy_dates_sorted, stock_date)
+                if j > 0:
+                    spy_idx_for_stock[i] = j - 1
+        
         for i in range(period, n):
-            if i >= len(spy_closes) or i < period:
-                continue
-            
+            # Stock ratio: look back 'period' bars in stock's own series
             if closes[i - period] != 0:
                 stock_ratio[i] = closes[i] / closes[i - period]
-            if spy_closes[i - period] != 0:
-                index_ratio[i] = spy_closes[i] / spy_closes[i - period]
+            
+            # Index ratio: look back 'period' bars in SPY's own series
+            spy_i = spy_idx_for_stock[i]
+            if spy_i >= period:
+                if spy_closes[spy_i - period] != 0:
+                    index_ratio[i] = spy_closes[spy_i] / spy_closes[spy_i - period]
         
         return stock_ratio, index_ratio
     
@@ -844,17 +879,18 @@ class PrecomputedIndicators:
         if idx < p.input_B18_history + b18_z:
             return False
         
-        bbw_now = self.bbw_b18[idx]
+        # Use SMA of last Z BBW values (matches original condition8_b18)
+        bbw_sma_now = self.sma_bbw_b18[idx]
         bbw_ago_idx = idx - p.input_B18_history
         
-        if bbw_ago_idx < 0 or np.isnan(bbw_now):
+        if bbw_ago_idx < 0 or np.isnan(bbw_sma_now):
             return False
         
         bbw_ago = self.bbw_b18[bbw_ago_idx]
         if np.isnan(bbw_ago):
             return False
         
-        cond_bbw = bbw_now < bbw_ago * p.input_B18_bbw_ratio
+        cond_bbw = bbw_sma_now < bbw_ago * p.input_B18_bbw_ratio
         
         bb_upper = self.bb_b18_upper[idx]
         if np.isnan(bb_upper):

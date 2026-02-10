@@ -14,7 +14,7 @@ from app.services.file_service import FileService
 from app.workers.algo_func.buy_signals import runAllBuyConditions, isBuy, OHLCV
 from app.workers.algo_func.sell_signals import runAllSellConditions, isSell
 from app.workers.algo_func.get_code_energy import calculate_energy_indicators_last_16_days
-# from app.workers.algo_func.precomputed_indicators import PrecomputedIndicators, is_buy_fast  # Disabled for correctness verification
+from app.workers.algo_func.precomputed_indicators import PrecomputedIndicators, is_buy_fast
 from app.models.algorithm_models import AlgorithmParameters
 from app.config.logging_config import get_algorithm_debug_mode, get_log_progress_interval
 from app.utils.performance_profiler import timed, TimingContext, get_profiler
@@ -224,11 +224,13 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
         spy_dates_sorted = [bar.date for bar in spy_data]
         code_dates_sorted = [bar.date for bar in code_data]
     
-    # NOTE: Pre-computed indicators disabled for correctness verification
-    # Using original buy_signals.py functions instead
-    # with TimingContext("precompute_indicators"):
-    #     precomputed = PrecomputedIndicators(code_data, spy_data, params)
-    #     precomputed.compute_all()
+    # Pre-compute all indicators once for O(1) lookups
+    with TimingContext("precompute_indicators"):
+        from app.workers.algo_func.precomputed_indicators import OHLCV as PrecompOHLCV
+        precomp_code = [PrecompOHLCV(b.date, b.open, b.high, b.low, b.close, b.volume) for b in code_data]
+        precomp_spy = [PrecompOHLCV(b.date, b.open, b.high, b.low, b.close, b.volume) for b in spy_data]
+        precomputed = PrecomputedIndicators(precomp_code, precomp_spy, params)
+        precomputed.compute_all()
     
     latest_signal = await get_latest_signal(csv_file_name, genome_id=genome_id)
 
@@ -274,11 +276,8 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
 
             if position_status == "F":
                 # Use original buy_signals.py functions for correctness
-                buySignals = runAllBuyConditions(filtered_code, tradeday_str, filtered_spy, params)
-                if ALGORITHM_DEBUG and day_index < 5:
-                    logger.info(f'Trade day: {tradeday_str}, stock: {code}, genome: {genome_id}')
-                    logger.info(f'Buy signals: {buySignals}')
-                buy = isBuy(buySignals)
+                buySignals = precomputed.run_all_buy_conditions_fast(code_end_idx)
+                buy = is_buy_fast(buySignals)
 
                 exit_price = 0
                 if latest_signal['next_open_action'] == "S":
@@ -327,6 +326,7 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
                     exit1,
                     tradeday_str,
                     params,
+                    energy_data=energy_data,
                 )
                 if ALGORITHM_DEBUG:
                     logger.debug(f'Trade day: {tradeday_str}, stock: {code}, genome: {genome_id}')
