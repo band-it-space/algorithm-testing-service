@@ -112,6 +112,28 @@ def calculate_genome_metrics(
     )
 
 
+def calculate_profit_delta(result, base) -> float:
+    """
+    Calculate profit delta as percentage relative to base algorithm.
+    Formula: ((genome_profit - base_profit) / |base_profit|) × 100
+    """
+    if base.total_profit != 0:
+        return round(
+            ((result.total_profit - base.total_profit) / abs(base.total_profit)) * 100, 2
+        )
+    return 0.0
+
+
+def calculate_win_rate(trades_win: int, trade_count: int) -> float:
+    """
+    Calculate win rate as ratio of profitable trades to total trades.
+    A trade is profitable when sell_price > buy_price.
+    """
+    if trade_count > 0:
+        return round((trades_win / trade_count) * 100, 2)
+    return 0.0
+
+
 def calculate_deltas_vs_base(
     results: List[GenomeResult],
     base_genome_id: str = "G_000"
@@ -138,7 +160,7 @@ def calculate_deltas_vs_base(
         
         if base and result.genome_id != base_genome_id:
             # Profit delta (percentage points difference)
-            result.profit_delta = round(result.profit_percent - base.profit_percent, 2)
+            result.profit_delta = calculate_profit_delta(result, base)
             # Win rate delta (percentage points difference)
             result.win_rate_delta = round(result.win_rate - base.win_rate, 2)
         elif result.genome_id == base_genome_id:

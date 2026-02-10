@@ -5,6 +5,7 @@ from typing import List, Optional, TypedDict, Union, Tuple, Dict, Any
 import requests
 import csv
 import pandas as pd
+import numpy as np
 
 from app.services.file_service import FileService
 from app.models.algorithm_models import UnifiedTradeSignal, AlgorithmParameters
@@ -19,6 +20,7 @@ from app.services.results_aggregation_service import (
 FIXED_DEPOSIT_AMOUNT = 10000.0
 GENERAL_RESULTS_FILE = "general_results"
 OPTIMIZATION_RESULTS_FILE = "optimization_results"
+AUTOMATED_RESULTS_FILE = "Automated Results"
 
 class ErrorResponse(TypedDict):
     error: str
@@ -27,8 +29,9 @@ class ErrorResponse(TypedDict):
 logger = logging.getLogger(__name__)
 
 API_KEY = os.getenv('API_KEY')
-START_DATE = "2009-03-06"
-END_DATE = "2019-03-06"
+# Date range from environment (with fallback defaults)
+START_DATE = os.getenv('OPTIMIZATION_START_DATE', '2025-01-01')
+END_DATE = os.getenv('OPTIMIZATION_END_DATE', '2026-02-02')
 
 file_service = FileService()
 
@@ -49,6 +52,7 @@ def _to_float_or_open(value) -> Union[float, str]:
     except Exception:
         return "Open position"
 
+
 async def save_financial_results(
     stock_code: str, 
     algo_data: List[Dict[str, Any]], 
@@ -56,44 +60,56 @@ async def save_financial_results(
     genome_id: str = "G_000",
     parameters: Optional[Dict[str, Any]] = None
 ):
-    """Save financial results including genome information."""
+    """
+    Save financial results including genome information.
+    
+    OPTIMIZED: Uses vectorized pandas operations instead of iterrows() (Task 7.1)
+    """
     if not algo_data:
         return
     
     df = pd.DataFrame(algo_data)
+    
+    # OPTIMIZATION: Vectorized profit calculation instead of iterrows()
+    # Convert Gain/Lose to numeric, handling non-numeric values
+    df['profit_pct'] = pd.to_numeric(df.get('Gain/Lose', pd.Series(dtype=float)), errors='coerce').fillna(0.0)
+    
+    # Vectorized profit USD calculation
+    df['profit_usd'] = (FIXED_DEPOSIT_AMOUNT * (df['profit_pct'] / 100.0)).round(2)
+    
+    # Vectorized open position detection
+    stop_signal_col = df.get('Stop Signal', pd.Series([''] * len(df), dtype=str)).astype(str)
+    exit_price_col = df.get('Exit price', pd.Series([''] * len(df), dtype=str)).astype(str)
+    
+    df['is_open'] = (
+        stop_signal_col.str.contains('Open position', na=False) |
+        exit_price_col.str.contains('Open position', na=False)
+    )
+    
+    # Vectorized exit day calculation using np.where
+    df['exit_day_val'] = np.where(df['is_open'], '', stop_signal_col)
+    
+    # Build result records using vectorized column access
     mapped_rows = []
     
-    for _, row in df.iterrows():
-        raw_gain = row.get("Gain/Lose")
-        profit_pct = 0.0
-        
-        if pd.notna(raw_gain) and raw_gain != "":
-            try:
-                profit_pct = float(raw_gain)
-            except (ValueError, TypeError):
-                profit_pct = 0.0
-
-        profit_usd = round(FIXED_DEPOSIT_AMOUNT * (profit_pct / 100.0), 2)
-
-        stop_signal_val = str(row.get("Stop Signal", ""))
-        exit_price_val = str(row.get("Exit price", ""))
-        
-        is_open = "Open position" in stop_signal_val or "Open position" in exit_price_val
-
-        if is_open:
-            exit_day_val = "" 
-        else:
-            exit_day_val = stop_signal_val
-
+    # Use numpy arrays for faster iteration
+    buy_signals = df.get('Buy Signal', pd.Series([''] * len(df))).values
+    entry_prices = df.get('Entry price', pd.Series([''] * len(df))).values
+    exit_prices = df.get('Exit price', pd.Series([''] * len(df))).values
+    exit_days = df['exit_day_val'].values
+    profit_usds = df['profit_usd'].values
+    profit_pcts = df['profit_pct'].values
+    
+    for idx in range(len(df)):
         record = {
             "symbol": stock_code,
             "genome_id": genome_id,
-            "entryDay": row.get("Buy Signal", ""),
-            "entryPrice": row.get("Entry price", ""),
-            "exitDay": exit_day_val,
-            "exitPrice": row.get("Exit price", ""),
-            "profit": profit_usd,
-            "Profit %": profit_pct,
+            "entryDay": buy_signals[idx] if pd.notna(buy_signals[idx]) else "",
+            "entryPrice": entry_prices[idx] if pd.notna(entry_prices[idx]) else "",
+            "exitDay": exit_days[idx],
+            "exitPrice": exit_prices[idx] if pd.notna(exit_prices[idx]) else "",
+            "profit": profit_usds[idx],
+            "Profit %": profit_pcts[idx],
             "Invested": FIXED_DEPOSIT_AMOUNT
         }
         mapped_rows.append(record)
@@ -150,6 +166,32 @@ async def save_genome_optimization_results(
         [output_row],
         fieldnames
     )
+    
+    # Also write to "Automated Results.csv" in the same trade statistics format
+    automated_fieldnames = get_output_fieldnames()
+    automated_row = {k: v for k, v in output_row.items() if k != "optimization_id"}
+    # Add "(BASE)" suffix for G_000 per Output Results Sample.csv format
+    if genome_id == "G_000":
+        automated_row["Genome ID"] = "G_000 (BASE)"
+    await file_service.add_data_to_csv(
+        AUTOMATED_RESULTS_FILE,
+        [automated_row],
+        automated_fieldnames
+    )
+    
+    # Store in Redis for Google Sheets output
+    if optimization_id:
+        try:
+            from app.services.optimization_service import OptimizationService
+            OptimizationService.store_genome_result(
+                optimization_id=optimization_id,
+                genome_id=genome_id,
+                stock_code=stock_code,
+                result=output_row
+            )
+            logger.debug(f"Stored result in Redis for {genome_id}/{stock_code}")
+        except Exception as e:
+            logger.error(f"Failed to store result in Redis: {e}")
     
     logger.info(f"Saved optimization result for {genome_id}/{stock_code}: {result.trade_count} trades, profit: {result.profit_percent:.2f}%")
     
@@ -321,12 +363,16 @@ async def process_result_task(processing_data):
         genome_id = processing_data.get('genome_id', 'G_000')
         parameters = processing_data.get('parameters', {})
         optimization_id = processing_data.get('optimization_id')
+        results_meta = processing_data.get('results', {})
+        
+        # Use genome-specific CSV file if provided (avoids concurrency issues)
+        genome_file_name = results_meta.get('genome_file_name', stock_code)
         
         logger.info(f"Starting processing data for stock_code: {stock_code}, genome: {genome_id}")
 
-        # Load algorithm results from CSV
-        new_algo_data = await file_service.read_data_from_csv(stock_code)
-        logger.info(f"Loaded {len(new_algo_data) if new_algo_data else 0} algorithm signals from CSV for stock {stock_code}")
+        # Load algorithm results from genome-specific CSV
+        new_algo_data = await file_service.read_data_from_csv(genome_file_name)
+        logger.info(f"Loaded {len(new_algo_data) if new_algo_data else 0} algorithm signals from CSV for stock {stock_code}, genome: {genome_id}")
 
         if new_algo_data:
             try:
@@ -351,6 +397,16 @@ async def process_result_task(processing_data):
                     
             except Exception as e:
                 logger.error(f"Failed to save financial summary for {stock_code}/{genome_id}: {e}")
+
+        # Clean up genome-specific temp CSV file
+        if genome_file_name != stock_code:
+            try:
+                temp_file_path = os.path.join(file_service.data_dir, f"{genome_file_name}.csv")
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                    logger.debug(f"Cleaned up temp file: {temp_file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temp file {genome_file_name}.csv: {e}")
 
         # API comparison (existing logic)
         api_result = await load_server_data(stock_code)
@@ -512,16 +568,21 @@ async def process_result_task(processing_data):
             'match_percent'
         ]
         
+        # Queue comparison data to a separate file (not Automated Results)
         QueueService.add_to_file_write_queue(
             stock_code, 
             genome_id=genome_id,
             data={
                 'results_data': results_data,
                 'field_names': field_names,
-                'optimization_id': optimization_id
+                'optimization_id': optimization_id,
+                'output_type': 'comparison'  # Mark as comparison data
             }
         )
         logger.info(f"File write task queued for stock: {stock_code}, genome: {genome_id}")
+
+        # NOTE: Trade statistics are already stored in Redis by save_genome_optimization_results()
+        # The comparison data below is only logged, not stored to Redis (to preserve correct Output format)
 
         # Update optimization progress if applicable
         if optimization_id:

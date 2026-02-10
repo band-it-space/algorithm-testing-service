@@ -29,8 +29,8 @@ services:
       - LOG_DIR=/app/logs
       - LOG_JSON=${LOG_JSON:-false}
       - GOOGLE_SHEETS_CREDENTIALS_PATH=/app/credentials/google_sheets.json
-      - INPUT_SHEET_ID=${INPUT_SHEET_ID:-}
-      - OUTPUT_SHEET_ID=${OUTPUT_SHEET_ID:-}
+      - INPUT_SHEET_ID=${INPUT_SHEET_ID:-11a3m0AlIGsZ5O1HRVgjCP3zSCds-b_5OJGXmHKCP56U}
+      - OUTPUT_SHEET_ID=${OUTPUT_SHEET_ID:-11a3m0AlIGsZ5O1HRVgjCP3zSCds-b_5OJGXmHKCP56U}
     volumes:
       - ./app:/app/app
       - ./logs:/app/logs
@@ -55,12 +55,9 @@ services:
       - PYTHONPATH=/app
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-      - ALGORITHM_WORKER_TIMEOUT=1000
-      - ALGORITHM_WORKER_MAX_RETRIES=${ALGORITHM_WORKER_MAX_RETRIES:-3}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_DIR=/app/logs
-      - LOG_JSON=${LOG_JSON:-false}
+      - OPTIMIZATION_START_DATE=${OPTIMIZATION_START_DATE:-2016-01-01}
+      - OPTIMIZATION_END_DATE=${OPTIMIZATION_END_DATE:-2026-02-02}
     volumes:
       - ./app:/app/app
       - ./workers:/app/workers
@@ -81,14 +78,21 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - RESULT_WORKER_TIMEOUT=${RESULT_WORKER_TIMEOUT:-300}
       - RESULT_WORKER_MAX_RETRIES=${RESULT_WORKER_MAX_RETRIES:-3}
+      - RESULT_WORKER_COUNT=${RESULT_WORKER_COUNT:-2}
+      - RESULT_CONCURRENT_TASKS=${RESULT_CONCURRENT_TASKS:-5}
+      - WORKER_CONCURRENT_TASKS=${WORKER_CONCURRENT_TASKS:-10}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_DIR=/app/logs
       - LOG_JSON=${LOG_JSON:-false}
+      - GOOGLE_SHEETS_CREDENTIALS_PATH=/app/credentials/google_sheets.json
+      - OPTIMIZATION_START_DATE=${OPTIMIZATION_START_DATE:-2016-01-01}
+      - OPTIMIZATION_END_DATE=${OPTIMIZATION_END_DATE:-2026-02-02}
     volumes:
       - ./app:/app/app
       - ./workers:/app/workers
       - ./logs:/app/logs
       - ./data:/app/data
+      - ./credentials:/app/credentials:ro
     depends_on:
       - redis
     restart: unless-stopped
@@ -104,6 +108,9 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - FILE_WRITE_WORKER_TIMEOUT=${FILE_WRITE_WORKER_TIMEOUT:-60}
       - FILE_WRITE_WORKER_MAX_RETRIES=${FILE_WRITE_WORKER_MAX_RETRIES:-3}
+      - FILE_WORKER_COUNT=${FILE_WORKER_COUNT:-1}
+      - FILE_CONCURRENT_TASKS=${FILE_CONCURRENT_TASKS:-3}
+      - WORKER_CONCURRENT_TASKS=${WORKER_CONCURRENT_TASKS:-10}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_DIR=/app/logs
       - LOG_JSON=${LOG_JSON:-false}

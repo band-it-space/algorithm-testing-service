@@ -8,11 +8,19 @@ from app.services.file_service import FileService
 logger = logging.getLogger(__name__)
 file_service = FileService()
 
+# Output files
+AUTOMATED_RESULTS_FILE = "Automated Results"
+COMPARISON_RESULTS_FILE = "comparison_results"
+
 
 async def process_file_write_task(task_data: Dict[str, Any]):
     """
     Process file write task from queue.
     Supports genome-based results and optimization data.
+    
+    Routes output based on 'output_type':
+    - 'comparison': API vs Algo signal comparison -> comparison_results.csv
+    - default: Trade statistics -> Automated Results.csv (matches Output Results Sample.csv)
     """
     try:
         logger.info("------------------------------")
@@ -25,19 +33,20 @@ async def process_file_write_task(task_data: Dict[str, Any]):
         results_data = data.get('results_data', task_data.get('results_data', []))
         field_names = data.get('field_names', task_data.get('field_names', []))
         optimization_id = data.get('optimization_id', task_data.get('optimization_id'))
+        output_type = data.get('output_type', 'default')
         
-        logger.info(f"Processing file write for stock: {stock_code}, genome: {genome_id}")
+        logger.info(f"Processing file write for stock: {stock_code}, genome: {genome_id}, type: {output_type}")
         
-        # Determine output file based on context
-        if optimization_id:
-            output_file = f"optimization_{optimization_id}_results"
+        # Route output to correct file based on type
+        if output_type == 'comparison':
+            output_file = COMPARISON_RESULTS_FILE
         else:
-            output_file = "results"
+            output_file = AUTOMATED_RESULTS_FILE
         
         success = await file_service.add_data_to_csv(output_file, results_data, field_names)
         
         if success:
-            logger.info(f"File write completed for stock: {stock_code}, genome: {genome_id}")
+            logger.info(f"File write completed for stock: {stock_code}, genome: {genome_id} -> {output_file}.csv")
         else:
             logger.error(f"File write failed for stock: {stock_code}, genome: {genome_id}")
             
@@ -64,7 +73,8 @@ async def write_optimization_summary(
             logger.warning(f"No results to write for optimization {optimization_id}")
             return False
         
-        output_file = output_file or f"optimization_{optimization_id}_summary"
+        # Always write to single "Automated Results.csv" file
+        output_file = AUTOMATED_RESULTS_FILE
         fieldnames = get_output_fieldnames()
         
         success = await file_service.add_data_to_csv(output_file, results, fieldnames)

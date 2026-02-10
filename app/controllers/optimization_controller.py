@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
@@ -113,10 +114,17 @@ async def run_optimization(
                 detail="At least one stock code is required"
             )
         
+        # Determine sheet_id for results output
+        # Use request.sheet_id if provided, otherwise use OUTPUT_SHEET_ID from env when use_google_sheets is True
+        output_sheet_id = None
+        if request.use_google_sheets:
+            output_sheet_id = request.sheet_id or os.getenv("OUTPUT_SHEET_ID")
+        
         # Create optimization
         metadata = OptimizationService.create_optimization(
             stock_codes=request.stock_codes,
             parameter_ranges=parameter_ranges,
+            sheet_id=output_sheet_id,
         )
         
         # Queue tasks immediately (synchronously for now to ensure it works)
@@ -141,7 +149,9 @@ async def run_optimization(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        import traceback
         logger.error(f"Error creating optimization: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

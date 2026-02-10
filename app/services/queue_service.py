@@ -96,6 +96,8 @@ class QueueService:
         results: Optional[Dict[str, Any]] = None
     ) -> str:
         """Add a task to the result processing queue."""
+        from app.workers.result_worker import process_result_task
+        
         task_id = str(uuid.uuid4())
         task_data = {
             "task_id": task_id,
@@ -107,8 +109,8 @@ class QueueService:
             "created_at": datetime.now().isoformat(),
         }
         
-        client = QueueService.get_redis_client()
-        client.rpush(QueueService.RESULT_PROCESSING_QUEUE, json.dumps(task_data))
+        queue = QueueService.get_result_queue()
+        job = queue.enqueue(process_result_task, task_data)
         logger.info(f"Added task {task_id} to result processing queue: stock={stock_code}, genome={genome_id}")
         
         return task_id
@@ -121,18 +123,20 @@ class QueueService:
         optimization_id: Optional[str] = None
     ) -> str:
         """Add a task to the file write queue."""
+        from app.workers.file_write_worker import process_file_write_task
+        
         task_id = str(uuid.uuid4())
         task_data = {
             "task_id": task_id,
-            "stock": stock_code,
+            "stock_code": stock_code,
             "genome_id": genome_id,
             "data": data or {},
             "optimization_id": optimization_id,
             "created_at": datetime.now().isoformat(),
         }
         
-        client = QueueService.get_redis_client()
-        client.rpush(QueueService.FILE_WRITE_QUEUE, json.dumps(task_data))
+        queue = QueueService.get_file_write_queue()
+        job = queue.enqueue(process_file_write_task, task_data)
         logger.info(f"Added task {task_id} to file write queue: stock={stock_code}, genome={genome_id}")
         
         return task_id

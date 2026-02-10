@@ -1,9 +1,12 @@
 import itertools
 import csv
+import logging
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
 from app.models.algorithm_models import AlgorithmParameters, ParameterRange
+
+logger = logging.getLogger(__name__)
 
 
 def parse_parameter_ranges(data: List[Dict[str, Any]]) -> List[ParameterRange]:
@@ -11,10 +14,16 @@ def parse_parameter_ranges(data: List[Dict[str, Any]]) -> List[ParameterRange]:
     ranges = []
     for row in data:
         try:
+            # Debug: Log the row being parsed
+            change_val = row.get("Change", row.get("change", "NOT_FOUND"))
+            logger.debug(f"Parsing row: name={row.get('Parameter Variable', row.get('name', 'N/A'))}, Change={change_val} (type={type(change_val).__name__})")
+            
             param_range = ParameterRange.from_dict(row)
             if param_range.name:  # Skip empty rows
+                logger.debug(f"  -> Parsed: name={param_range.name}, change={param_range.change}")
                 ranges.append(param_range)
         except (ValueError, KeyError) as e:
+            logger.warning(f"Failed to parse row: {row}, error: {e}")
             continue  # Skip invalid rows
     return ranges
 
@@ -68,6 +77,11 @@ def generate_genomes(
     if base_params is None:
         base_params = AlgorithmParameters()
     
+    # Debug: Log all parameters and their change flag
+    logger.info(f"generate_genomes: Received {len(ranges)} parameter ranges")
+    for r in ranges:
+        logger.info(f"  Parameter: {r.name}, change={r.change}, min={r.min_val}, max={r.max_val}, step={r.step}")
+    
     genomes = []
     
     # G_000 is always BASE with default parameters
@@ -80,6 +94,8 @@ def generate_genomes(
     
     # Get variable parameters (change=True)
     variable_ranges = [r for r in ranges if r.change]
+    
+    logger.info(f"Variable parameters (change=True): {[r.name for r in variable_ranges]}")
     
     if not variable_ranges:
         return genomes  # Only BASE genome
@@ -144,3 +160,62 @@ def create_genome_summary(genomes: List[Dict[str, Any]], ranges: List[ParameterR
         ],
         "fixed_parameters_count": len([r for r in ranges if not r.change])
     }
+
+def get_genome_parameters(genome_id: str, optimization_id: Optional[str] = None) -> Optional[dict]:
+    """
+    Get genome parameters by ID.
+    
+    Args:
+        genome_id: The genome identifier (e.g., 'G_001')
+        optimization_id: Optional optimization ID to scope the search
+    
+    Returns:
+        Dictionary with genome parameters or None if not found
+    """
+    # Import here to avoid circular imports
+    from app.services.optimization_service import OptimizationService
+    
+    if optimization_id:
+        # Get specific optimization
+        metadata = OptimizationService.get_optimization(optimization_id)
+        if not metadata:
+            return None
+        
+        # Regenerate genomes from parameter ranges
+        ranges = parse_parameter_ranges(metadata.parameter_ranges)
+        base_params = AlgorithmParameters()
+        genomes = generate_genomes(ranges, base_params)
+        
+        # Find the genome by ID
+        genome = get_genome_by_id(genomes, genome_id)
+        if genome:
+            return {
+                "genome_id": genome_id,
+                "optimization_id": optimization_id,
+                "parameters": genome.get("parameters", {})
+            }
+        return None
+    else:
+        # Search through recent optimizations
+        client = OptimizationService.get_redis_client()
+        optimization_ids = client.lrange(OptimizationService.OPTIMIZATION_LIST_KEY, 0, 50)
+        
+        for opt_id in optimization_ids:
+            opt_id_str = opt_id.decode() if isinstance(opt_id, bytes) else opt_id
+            metadata = OptimizationService.get_optimization(opt_id_str)
+            if not metadata:
+                continue
+                
+            ranges = parse_parameter_ranges(metadata.parameter_ranges)
+            base_params = AlgorithmParameters()
+            genomes = generate_genomes(ranges, base_params)
+            
+            genome = get_genome_by_id(genomes, genome_id)
+            if genome:
+                return {
+                    "genome_id": genome_id,
+                    "optimization_id": opt_id_str,
+                    "parameters": genome.get("parameters", {})
+                }
+        
+        return None

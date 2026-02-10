@@ -2,15 +2,15 @@ import os
 import aiomysql
 import asyncio
 from dotenv import load_dotenv
-
-
-
+import logging
 
 import requests
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # API configuration
 API_KEY = os.getenv('API_KEY')
@@ -41,6 +41,48 @@ dbconfig = {
 # Глобальний пул, створюється один раз
 pool: aiomysql.Pool | None = None
 
+# Global cache service instance
+_cache_service = None
+_cache_initialized = False
+
+
+def _get_cache_service():
+    """Get or create the cache service singleton."""
+    global _cache_service, _cache_initialized
+
+    if _cache_initialized:
+        return _cache_service
+
+    _cache_initialized = True
+
+    try:
+        from app.services.data_cache_service import create_cache_service_from_config
+        _cache_service = create_cache_service_from_config()
+        if _cache_service:
+            logger.info("Data cache service initialized successfully")
+        else:
+            logger.warning("Data cache service not available, running without cache")
+    except Exception as e:
+        logger.warning(f"Failed to initialize cache service: {e}")
+        _cache_service = None
+
+    return _cache_service
+
+
+async def warm_spy_cache(end_date: str | None = None):
+    """
+    Pre-warm the SPY (2800) cache to eliminate redundant API calls.
+    Call this once at the start of batch processing.
+    """
+    cache = _get_cache_service()
+    if not cache:
+        return False
+
+    def fetch_spy():
+        return _fetch_stock_data_from_api("2800", end_date)
+
+    return cache.warm_spy_cache(fetch_spy)
+
 
 async def init_db_pool():
     """Ініціалізує глобальний пул з'єднань."""
@@ -54,7 +96,61 @@ async def init_db_pool():
         print("✅ MySQL connection pool initialized")
 
 async def get_stock_data_from_db(code: str, end_date: str | None = None):
-    """Отримати дані про акції з API."""
+    """Отримати дані про акції з API з підтримкою кешування."""
+    cache = _get_cache_service()
+
+    # Try to get from cache first
+    if cache:
+        try:
+            from app.services.data_cache_service import OHLCV
+            cached_data = cache.get_stock_data(code, end_date=end_date)
+
+            if cached_data is not None:
+                logger.debug(f"Cache HIT for stock {code}")
+                return [
+                    {
+                        "date": bar.date,
+                        "time": "00:00:00",
+                        "open": bar.open,
+                        "high": bar.high,
+                        "low": bar.low,
+                        "close": bar.close,
+                        "volume": int(bar.volume),
+                    }
+                    for bar in cached_data
+                ]
+        except Exception as e:
+            logger.warning(f"Cache read error for {code}: {e}")
+
+    # Cache miss - fetch from API
+    logger.debug(f"Cache MISS for stock {code}, fetching from API")
+    stock_records = _fetch_stock_data_from_api(code, end_date)
+
+    # Store in cache for future requests
+    if cache and stock_records:
+        try:
+            from app.services.data_cache_service import OHLCV
+            ohlcv_data = [
+                OHLCV(
+                    date=rec["date"],
+                    open=rec["open"],
+                    high=rec["high"],
+                    low=rec["low"],
+                    close=rec["close"],
+                    volume=float(rec["volume"])
+                )
+                for rec in stock_records
+            ]
+            cache.set_stock_data(code, ohlcv_data)
+            logger.debug(f"Cached {len(ohlcv_data)} bars for stock {code}")
+        except Exception as e:
+            logger.warning(f"Failed to cache data for {code}: {e}")
+
+    return stock_records
+
+
+def _fetch_stock_data_from_api(code: str, end_date: str | None = None):
+    """Original API fetch logic - untouched."""
     if not API_KEY:
         raise RuntimeError("STOCKFISHER_API_KEY not found in environment variables")
     

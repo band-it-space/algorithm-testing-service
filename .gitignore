@@ -165,6 +165,7 @@ Thumbs.db
 # Google credentials
 credentials/
 service_account.json
+google_sheets.json
 *.json
 !package.json
 !package-lock.json

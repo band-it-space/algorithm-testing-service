@@ -126,3 +126,13 @@ def setup_logging() -> None:
     )
 
 
+def get_algorithm_debug_mode() -> bool:
+    """Check if algorithm debug mode is enabled."""
+    return os.getenv("ALGORITHM_DEBUG", "false").lower() == "true"
+
+
+def get_log_progress_interval() -> int:
+    """Get the interval for progress logging (in days)."""
+    return int(os.getenv("LOG_PROGRESS_INTERVAL", "100"))
+
+
