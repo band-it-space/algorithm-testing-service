@@ -439,7 +439,7 @@ def runAllSellConditions(ohlcv, spy_data, buy_date, buy_price, stop_loss, trade_
     if params is None:
         params = AlgorithmParameters()
 
-    # Safety: verify data is sorted (check first and last only — O(1))
+    # Safety: verify data is sorted (O(1) check)
     if len(ohlcv) >= 2:
         assert ohlcv[0].date <= ohlcv[-1].date, \
             f"OHLCV not sorted: first={ohlcv[0].date}, last={ohlcv[-1].date}"
@@ -2397,7 +2397,7 @@ docker-compose exec algorithm-worker python tests/test_energy_parity.py
 
 ---
 
-## Phase 7 — Integrate Pre-Computed Sell Path into Algorithm Worker
+## Phase 7 — Integrate Pre-Computed Sell Path into Algorithm Worker ✅
 
 > **Goal:** Wire the pre-computed sell methods from Phases 5–6 into the main loop, replacing all per-call O(n) sell computations with O(1) lookups.  
 > **Expected speedup:** Activates the full speedup from Phases 5+6. Total pipeline ~15–25s per genome (from ~133s).  

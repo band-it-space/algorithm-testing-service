@@ -167,6 +167,17 @@ class PrecomputedIndicators:
         # === Date-to-index map for O(1) buy-date lookup ===
         self.date_to_idx: Dict[str, int] = {}
 
+        # === Energy indicator arrays ===
+        self.e1: Optional[np.ndarray] = None
+        self.e2: Optional[np.ndarray] = None
+        self.e3: Optional[np.ndarray] = None
+        self.e4: Optional[np.ndarray] = None
+        self.e5: Optional[np.ndarray] = None
+        self.e_total: Optional[np.ndarray] = None
+        self.energy_score: Optional[np.ndarray] = None
+        self.stock_ratio_33: Optional[np.ndarray] = None
+        self.spy_ratio_33: Optional[np.ndarray] = None
+
         self._computed = False
     
     def compute_all(self) -> None:
@@ -331,6 +342,73 @@ class PrecomputedIndicators:
 
         # === Date-to-index map for O(1) buy-date lookup ===
         self.date_to_idx = {d: i for i, d in enumerate(self.dates)}
+
+        # === Energy E1: New high in past 20 days + close in upper range ===
+        self.e1 = np.zeros(self.n, dtype=np.int8)
+        for i in range(66, self.n):
+            # Max of highs in [i-20, i-1] — excludes current bar
+            if i >= 20:
+                max_high_20_excl = self.rolling_max_20[i - 1]
+            else:
+                max_high_20_excl = np.max(self.highs[max(0, i - 20):i]) if i > 0 else 0
+
+            if np.isnan(max_high_20_excl):
+                continue
+
+            cond_high = self.highs[i] > max_high_20_excl
+            cond_close = self.closes[i] > (self.highs[i] - self.lows[i]) * 0.65 + self.lows[i]
+
+            if cond_high and cond_close:
+                self.e1[i] = 1
+
+        # === Energy E2: StochRSI(10) > 0.5 ===
+        self.e2 = np.zeros(self.n, dtype=np.int8)
+        for i in range(66, self.n):
+            if not np.isnan(self.stochrsi_10[i]) and self.stochrsi_10[i] > 0.5:
+                self.e2[i] = 1
+
+        # === Energy E3: slope(close, 66) > 0 → close[i] > close[i-66] ===
+        self.e3 = np.zeros(self.n, dtype=np.int8)
+        for i in range(66, self.n):
+            if self.closes[i] > self.closes[i - 66]:
+                self.e3[i] = 1
+
+        # === Energy E4: stock outperforms SPY over 33 days ===
+        self.stock_ratio_33, self.spy_ratio_33 = self._calc_period_ratios(
+            self.closes, self.spy_closes, 33
+        )
+
+        self.e4 = np.zeros(self.n, dtype=np.int8)
+        for i in range(66, self.n):
+            sr = self.stock_ratio_33[i]
+            ir = self.spy_ratio_33[i]
+            if not np.isnan(sr) and not np.isnan(ir) and sr > ir:
+                self.e4[i] = 1
+
+        # === Energy E5: upper half of 5-day range + close > 5-day-ago + near 250-day high ===
+        self.e5 = np.zeros(self.n, dtype=np.int8)
+        for i in range(66, self.n):
+            if i < 5:
+                continue
+
+            min5 = self.rolling_min_low_5[i]
+            max5 = self.rolling_max_high_5[i]
+            max250 = self.rolling_max_250[i]
+
+            if np.isnan(min5) or np.isnan(max5) or np.isnan(max250):
+                continue
+
+            cond1 = (self.closes[i] - min5) / (max5 - min5) > 0.5 if max5 != min5 else False
+            cond2 = self.closes[i] > self.closes[i - 5]
+            cond3 = (max250 - self.closes[i]) / max250 < 0.07 if max250 != 0 else False
+
+            if cond1 and cond2 and cond3:
+                self.e5[i] = 1
+
+        # === Energy score: rolling 16-day sum of E1+E2+E3+E4+E5, divided by 16 ===
+        self.e_total = (self.e1 + self.e2 + self.e3 + self.e4 + self.e5).astype(np.float64)
+        e_series = pd.Series(self.e_total)
+        self.energy_score = (e_series.rolling(16, min_periods=16).sum() / 16.0).values
 
         self._computed = True
         logger.info("Indicators pre-computed successfully")
@@ -1139,9 +1217,427 @@ class PrecomputedIndicators:
             'stopLoss': self.get_s1_stop_loss(idx),
         }
 
+    def get_energy_data(self, idx: int) -> dict:
+        """Return energy data dict for CSV output — drop-in replacement
+        for calculate_energy_indicators_last_16_days() return value.
+
+        Returns dict with keys: energy_score, E1, E2, E3, E4, E5.
+        Values are strings ("0"/"1") matching the original format.
+        """
+        if idx < 0 or idx >= self.n:
+            return {
+                "energy_score": 0,
+                "E1": "0", "E2": "0", "E3": "0", "E4": "0", "E5": "0",
+            }
+
+        es = self.energy_score[idx] if not np.isnan(self.energy_score[idx]) else 0
+
+        return {
+            "energy_score": es,
+            "E1": str(int(self.e1[idx])),
+            "E2": str(int(self.e2[idx])),
+            "E3": str(int(self.e3[idx])),
+            "E4": str(int(self.e4[idx])),
+            "E5": str(int(self.e5[idx])),
+        }
+
+    def get_s9_condition(self, idx: int) -> bool:
+        """S9: energy_score < threshold.
+
+        Original: s9(trade_date, ohlcv, spy_data, params, energy_data=energy_data)
+        """
+        if idx < 0 or idx >= self.n or np.isnan(self.energy_score[idx]):
+            return False
+        return self.energy_score[idx] < self.params.input_S9_energy_thresh
+
+
+    def get_s4_condition(self, idx: int, buy_idx: int, buy_price: float) -> bool:
+        """S4: SMA ratio + gain check within max_days window after buy."""
+        p = self.params
+        max_days = p.input_S4_max_days
+        sma_period = getattr(p, 'input_S4_sma_period', 150)
+
+        if buy_idx < 0 or buy_idx < sma_period - 1:
+            return False
+
+        day_n_idx = buy_idx + max_days
+        if day_n_idx >= self.n:
+            return False
+
+        # S4 only fires at exactly day_n_idx
+        if idx != day_n_idx:
+            return False
+
+        sma_arr = self.sma_s4
+
+        window_idx = range(buy_idx + 1, day_n_idx + 1)
+        if any(np.isnan(sma_arr[i]) for i in window_idx):
+            return False
+
+        A = sum(1 for i in window_idx if self.closes[i] > sma_arr[i])
+        ratio = A / float(max_days)
+
+        close_n = self.closes[day_n_idx]
+        gain_pct = ((close_n - buy_price) / buy_price) * 100.0
+
+        return (ratio < p.input_S4_ratio_threshold) and (gain_pct < p.input_S4_gain_threshold)
+
+    def get_s5_condition(self, idx: int, buy_idx: int, buy_price: float,
+                         stop_loss: float) -> tuple:
+        """S5: Trailing stop with ATR push-up on key days.
+        Returns (exit_signal: bool, new_stop_loss: float).
+        """
+        p = self.params
+        initial_days = p.input_S5_initial_days
+        step_days = p.input_S5_step_days
+        push_up_atr = p.input_S5_push_up_atr
+
+        if buy_idx < 0:
+            return False, stop_loss
+
+        current_close = self.closes[idx]
+        days_since_buy = idx - buy_idx
+
+        is_key_day = False
+        if days_since_buy == initial_days:
+            is_key_day = True
+        elif days_since_buy > initial_days and (days_since_buy - initial_days + 1) % step_days == 0:
+            is_key_day = True
+        elif days_since_buy > initial_days:
+            return current_close < stop_loss, stop_loss
+
+        if not is_key_day:
+            return False, stop_loss
+
+        current_atr = self.atr_s5[idx]
+        if np.isnan(current_atr) or current_atr == 0:
+            return False, stop_loss
+
+        if days_since_buy == initial_days:
+            new_stop_loss = buy_price + push_up_atr * current_atr
+        else:
+            new_stop_loss = stop_loss + push_up_atr * current_atr
+
+        exit_signal = current_close < new_stop_loss
+        return exit_signal, new_stop_loss
+
+    def get_s6_condition(self, idx: int, buy_idx: int) -> bool:
+        """S6: Days since most recent 90-day high exceeds threshold."""
+        p = self.params
+        high_window = getattr(p, 'input_S6_high_window', 90)
+
+        if buy_idx < 0 or idx < high_window - 1:
+            return False
+        if self.n < high_window + 10:
+            return False
+
+        days_since_buy = idx - buy_idx
+        if days_since_buy < p.input_S6_min_days:
+            return False
+
+        days_since_high = self.days_since_high_90[idx]
+        if np.isnan(days_since_high):
+            return False
+
+        return int(days_since_high) >= p.input_S6_days_threshold
+
+    def get_s7_condition(self, idx: int) -> bool:
+        """S7: Two consecutive large bearish bodies > body_mult * ATR(22)."""
+        p = self.params
+        atr_period = getattr(p, 'input_S7_atr_period', 22)
+
+        if idx < 2 or idx >= self.n:
+            return False
+        if self.n < atr_period + 2:
+            return False
+
+        atr_prev = self.atr_s7[idx - 1]
+        atr_last = self.atr_s7[idx]
+
+        if np.isnan(atr_prev) or np.isnan(atr_last):
+            return False
+
+        body_prev = self.opens[idx - 1] - self.closes[idx - 1]
+        body_last = self.opens[idx] - self.closes[idx]
+
+        cond_prev = body_prev > p.input_S7_body_mult * atr_prev
+        cond_last = body_last > p.input_S7_body_mult * atr_last
+
+        return cond_prev and cond_last
+
+    def get_s8_condition(self, idx: int) -> bool:
+        """S8: ATR(100) SMA > threshold * max(ATR(22) SMA, 126 window) + bearish body count."""
+        p = self.params
+
+        if self.n < 148 or idx < 148:
+            return False
+
+        current_atr100 = self.sma_tr_100[idx]
+        max_atr22 = self.rolling_max_sma_tr_22[idx]
+
+        if np.isnan(current_atr100) or np.isnan(max_atr22):
+            return False
+
+        if not (current_atr100 > p.input_S8_atr100_threshold * max_atr22):
+            return False
+
+        count_bear_huge = 0
+        for j in range(5):
+            bar_idx = idx - 4 + j
+            if bar_idx < 0:
+                continue
+            body = self.opens[bar_idx] - self.closes[bar_idx]
+            atr100_j = self.sma_tr_100[bar_idx]
+            if np.isnan(atr100_j):
+                continue
+            if body > p.input_S8_body_mult * atr100_j:
+                count_bear_huge += 1
+
+        return count_bear_huge >= p.input_S8_bear_count
+
+    def get_s10_condition(self, idx: int) -> bool:
+        """S10: ATR(10) > atr_ratio * ATR(100) + drawdown from 90-day high."""
+        p = self.params
+
+        if idx < 101 or self.n < 101:
+            return False
+
+        atr10 = self.atr_10[idx]
+        atr100 = self.atr_100[idx]
+
+        if np.isnan(atr10) or np.isnan(atr100):
+            return False
+
+        # S10 uses data[-91:-1] — 90 bars EXCLUDING current bar
+        high90 = self.rolling_max_high_90[idx - 1]
+        if np.isnan(high90) or high90 <= 0:
+            return False
+
+        last_close = self.closes[idx]
+        drawdown_pct = (high90 - last_close) / high90
+
+        cond_vol = atr10 > p.input_S10_atr_ratio * atr100
+        cond_dd = drawdown_pct > p.input_S10_drawdown
+
+        return cond_vol and cond_dd
+
+    def get_s11_condition(self, idx: int, buy_idx: int) -> bool:
+        """S11: Fibonacci level (0.382) for 2 consecutive days after xx_days."""
+        p = self.params
+
+        if buy_idx < 0 or idx < 249 or self.n < 250:
+            return False
+
+        bars_since_entry = idx - buy_idx
+        if bars_since_entry <= p.input_S11_xx_days:
+            return False
+
+        return bool(self.fibo_consec_s11[idx])
+
+    def get_s12_condition(self, idx: int, buy_idx: int) -> bool:
+        """S12: Fibonacci level (0.236) for 22 consecutive days after xx_days."""
+        p = self.params
+
+        if buy_idx < 0 or idx < 249 or self.n < 250:
+            return False
+
+        bars_since_entry = idx - buy_idx
+        if bars_since_entry <= p.input_S12_xx_days:
+            return False
+
+        return bool(self.fibo_consec_s12[idx])
+
+    def get_s13_condition(self, idx: int, buy_idx: int) -> bool:
+        """S13: Close < min(close, 80) after min_days since buy."""
+        p = self.params
+        lookback = p.input_S13_lookback
+
+        if buy_idx < 0 or idx < lookback + 1 or self.n < lookback + 1:
+            return False
+
+        days_since_buy = idx - buy_idx
+        if days_since_buy < p.input_S13_min_days:
+            return False
+
+        # Excludes current bar
+        min_close_n = self.rolling_min_close_80[idx - 1]
+        if np.isnan(min_close_n):
+            return False
+
+        return self.closes[idx] < min_close_n
+
+    def get_s14_condition(self, idx: int, buy_idx: int) -> bool:
+        """S14: Underperforming SPY at all three horizons after min_days."""
+        p = self.params
+
+        if buy_idx < 0:
+            return False
+
+        days_since_buy = idx - buy_idx
+        if days_since_buy < p.input_S14_min_days:
+            return False
+
+        horizons = p.input_S14_horizons
+
+        for horizon in horizons:
+            stock_r = self.s14_stock_ratios.get(horizon)
+            index_r = self.s14_index_ratios.get(horizon)
+
+            if stock_r is None or index_r is None:
+                return False
+
+            sr = stock_r[idx]
+            ir = index_r[idx]
+
+            if np.isnan(sr) or np.isnan(ir):
+                return False
+
+            if sr >= ir:
+                return False  # Not underperforming at this horizon
+
+        return True  # Underperforming at ALL horizons
+
+    def get_s15_condition(self, idx: int) -> bool:
+        """S15: Crash drop — close/close[idx-lookback] < -crash_drop."""
+        p = self.params
+        lookback = p.input_S15_lookback
+
+        if idx < lookback + 1:
+            return False
+
+        base_close = self.closes[idx - lookback]
+        if base_close <= 0:
+            return False
+
+        ret = (self.closes[idx] / base_close) - 1
+        return ret < -p.input_S15_crash_drop
+
+    def get_s16_condition(self, idx: int, buy_idx: int) -> bool:
+        """S16: Big price drop + ATR volatility spike."""
+        p = self.params
+        s16_xx = p.input_S16_xx
+        s16_yy = p.input_S16_yy
+        s16_effective = p.input_S16_effective
+        s16_atr_inc = p.input_S16_atr_inc
+        s16_atr_day = p.input_S16_atr_day
+        atr_period = 22
+
+        if buy_idx < 0:
+            return False
+        if self.n < atr_period + s16_yy + s16_atr_day + 1:
+            return False
+
+        bars_since_entry = idx - buy_idx
+        if bars_since_entry <= s16_effective:
+            return False
+
+        if idx - s16_yy < 0:
+            return False
+
+        last_close = self.closes[idx]
+        base_close = self.closes[idx - s16_yy]
+        if base_close <= 0:
+            return False
+
+        ret_yy = last_close / base_close - 1
+        big_drop = ret_yy < -s16_xx / 100.0
+
+        atr_now = self.atr_s7[idx]
+        atr_past_idx = idx - s16_atr_day
+        if atr_past_idx < 0:
+            return False
+        atr_past = self.atr_s7[atr_past_idx]
+
+        if np.isnan(atr_now) or np.isnan(atr_past) or atr_past <= 0:
+            return False
+
+        vol_spike = (atr_now / atr_past - 1.0) * 100.0 > s16_atr_inc
+
+        return vol_spike and big_drop
+
+    def get_s17_condition(self, idx: int, buy_idx: int) -> bool:
+        """S17: Wide range + near bottom."""
+        p = self.params
+        min_days = p.input_S17_min_days
+
+        if buy_idx < 0 or idx < min_days or self.n < min_days:
+            return False
+
+        days_since_buy = idx - buy_idx
+        if days_since_buy < min_days:
+            return False
+
+        high_n = self.rolling_max_high_150[idx]
+        low_n = self.rolling_min_low_150[idx]
+
+        if np.isnan(high_n) or np.isnan(low_n) or high_n <= low_n:
+            return False
+
+        is_wide_range = high_n > p.input_S17_wide_range * low_n
+        if not is_wide_range:
+            return False
+
+        last_close = self.closes[idx]
+        is_near_bottom = last_close < p.input_S17_near_bottom * low_n
+
+        return is_near_bottom
+
+    def run_all_sell_conditions_fast(self, idx: int, buy_idx: int, buy_price: float,
+                                     stop_loss: float) -> dict:
+        """Run all sell conditions using pre-computed indicators.
+
+        Drop-in replacement for sell_signals.runAllSellConditions().
+        Returns {"conditions": {...}, "stop_loss": new_stop} — same format.
+        """
+        # S5 MUST always run — it returns updated stop_loss
+        s5_exit, new_stop = self.get_s5_condition(idx, buy_idx, buy_price, stop_loss)
+
+        # Short-circuit evaluation ordered cheapest-to-most-expensive
+        ordered_checks = [
+            ("S1",  lambda: self.closes[idx] <= stop_loss
+                            if isinstance(stop_loss, (int, float))
+                               and np.isfinite(stop_loss)
+                            else False),
+            ("S15", lambda: self.get_s15_condition(idx)),
+            ("S5",  lambda: s5_exit),
+            ("S7",  lambda: self.get_s7_condition(idx)),
+            ("S9",  lambda: self.get_s9_condition(idx)),
+            ("S17", lambda: self.get_s17_condition(idx, buy_idx)),
+            ("S13", lambda: self.get_s13_condition(idx, buy_idx)),
+            ("S10", lambda: self.get_s10_condition(idx)),
+            ("S8",  lambda: self.get_s8_condition(idx)),
+            ("S6",  lambda: self.get_s6_condition(idx, buy_idx)),
+            ("S4",  lambda: self.get_s4_condition(idx, buy_idx, buy_price)),
+            ("S16", lambda: self.get_s16_condition(idx, buy_idx)),
+            ("S11", lambda: self.get_s11_condition(idx, buy_idx)),
+            ("S12", lambda: self.get_s12_condition(idx, buy_idx)),
+            ("S14", lambda: self.get_s14_condition(idx, buy_idx)),
+        ]
+
+        conditions = {}
+        for key, check_fn in ordered_checks:
+            result = check_fn()
+            conditions[key] = result
+            if result:
+                for remaining_key, _ in ordered_checks:
+                    if remaining_key not in conditions:
+                        conditions[remaining_key] = False
+                break
+
+        return {"conditions": conditions, "stop_loss": new_stop}
+
+    def is_buy_fast(self, signals: Dict[str, Any]) -> bool:
+        """Check if buy conditions are met."""
+        return bool(
+            (signals['B1'] and signals['B3'] and signals['B8'] and 
+             signals['B9'] and signals['B10'] and signals['B11'] and 
+             signals['B12'] and signals['B13']) 
+            or signals['B18']
+        )
+
 
 def is_buy_fast(signals: Dict[str, Any]) -> bool:
-    """Check if buy conditions are met."""
+    """Standalone version — check if buy conditions are met."""
     return bool(
         (signals['B1'] and signals['B3'] and signals['B8'] and 
          signals['B9'] and signals['B10'] and signals['B11'] and 

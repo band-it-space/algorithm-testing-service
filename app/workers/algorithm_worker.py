@@ -32,52 +32,23 @@ LOG_INTERVAL = get_log_progress_interval()
 
 
 def _build_date_index(data: List[OHLCV]) -> Dict[str, int]:
-    """
-    Build a date-to-index mapping for O(1) lookups.
-    
-    Args:
-        data: List of OHLCV objects sorted by date ascending
-        
-    Returns:
-        Dictionary mapping date strings to their index in the list
-    """
+    """Build a date-to-index mapping for O(1) lookups."""
     return {bar.date: i for i, bar in enumerate(data)}
 
 
 def _find_end_index(date_index: Dict[str, int], sorted_dates: List[str], target_date: str, data_len: int) -> int:
-    """
-    Find the index for slicing data up to target_date inclusive.
-    
-    Uses the date index for O(1) lookup when date exists,
-    falls back to binary search for O(log n) when date doesn't exist.
-    
-    Args:
-        date_index: Mapping of dates to indices
-        sorted_dates: Sorted list of date strings
-        target_date: The target date string (YYYY-MM-DD)
-        data_len: Length of the data list
-        
-    Returns:
-        End index for slicing (inclusive)
-    """
-    # O(1) lookup if date exists in data
+    """Find the index for slicing data up to target_date inclusive."""
     if target_date in date_index:
         return date_index[target_date]
-    
-    # Binary search fallback for dates not in the dataset
-    # bisect_right gives us the insertion point, subtract 1 to get last date <= target
     idx = bisect_right(sorted_dates, target_date)
     if idx == 0:
-        return -1  # No data before target date
+        return -1
     return idx - 1
 
 
 @timed("algorithm_task_total")
 async def process_algorithm_task(task_data):
-    """
-    Воркер для обробки алгоритмів (перша черга)
-    Optimized with data caching and pre-processing.
-    """
+    """Воркер для обробки алгоритмів (перша черга)"""
     try:
         stock_code = task_data['stock']
         genome_id = task_data.get('genome_id', 'G_000')
@@ -90,14 +61,11 @@ async def process_algorithm_task(task_data):
         with TimingContext("db_pool_init"):
             await init_db_pool()
 
-        # Warm SPY cache once per batch (idempotent)
         with TimingContext("spy_cache_warm"):
             await warm_spy_cache(END_DATE)
 
-        # Use genome-specific CSV filename to avoid concurrency issues
         genome_file_name = f"{stock_code}_{genome_id}"
 
-        # Step 3.2.1 — Fetch data once, reuse across all steps
         with TimingContext("fetch_all_data"):
             code_data_raw = await get_stock_data_from_db(stock_code, END_DATE)
             spy_data_raw = await get_stock_data_from_db("2800", END_DATE)
@@ -130,7 +98,6 @@ async def process_algorithm_task(task_data):
         
         logger.info(f"Algorithm task {task_data['task_id']} completed, genome: {genome_id}, added to processing queue: {processing_task_id}")
         
-        # Log profiling summary periodically
         profiler = get_profiler()
         if ALGORITHM_DEBUG:
             profiler.log_summary()
@@ -142,7 +109,6 @@ async def process_algorithm_task(task_data):
         raise e
 
 
-# Step 3.2.2 — Update get_data_and_save_to_csv() signature to accept pre-fetched data
 async def get_data_and_save_to_csv(code: str, trade_date: str, genome_id: str = "G_000",
                                     file_service: "FileService" = None,
                                     file_name: str = None,
@@ -150,17 +116,13 @@ async def get_data_and_save_to_csv(code: str, trade_date: str, genome_id: str = 
     if file_service is None:
         file_service = FileService()
 
-    # Use genome-specific file name if provided, otherwise fall back to stock code
     csv_file_name = file_name or code
 
-    # Replace the internal fetch with:
     if code_data_raw is None:
         code_data_raw = await get_stock_data_from_db(code, END_DATE)
 
     code_data = code_data_raw
 
-    # For initial signal, use START_DATE or first available date
-    # This ensures the main loop processes all dates from START_DATE to END_DATE
     effective_date = START_DATE
     if code_data and code_data[0]["date"] > START_DATE:
         effective_date = code_data[0]["date"]
@@ -196,16 +158,7 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
                                   genome_id: str = "G_000", file_name: str = None,
                                   code_data_raw=None, spy_data_raw=None,
                                   initial_signal=None):
-    """
-    Main signal calculation loop with optimized data handling.
-    
-    Key optimizations:
-    1. Pre-sort data once at start
-    2. Build date-to-index mappings for O(1) lookups
-    3. Use index-based slicing instead of list comprehension filtering
-    4. Pre-parse dates to avoid repeated pd.to_datetime() calls
-    """
-    # Use genome-specific file name if provided
+    """Main signal calculation loop with optimized data handling."""
     csv_file_name = file_name or code
 
     if params is None:
@@ -213,7 +166,6 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
     
     print("start")
     
-    # Fetch data (leverages cache if available)
     if spy_data_raw is None:
         with TimingContext("fetch_spy_data"):
             spy_data_raw = await get_stock_data_from_db("2800", trade_date)
@@ -222,7 +174,6 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
         with TimingContext("fetch_code_data"):
             code_data_raw = await get_stock_data_from_db(code, trade_date)
     
-    # Step 3.3.2 — Convert to OHLCV only if needed (might already be OHLCV from cache)
     with TimingContext("convert_to_ohlcv"):
         if code_data_raw and isinstance(code_data_raw[0], dict):
             code_data = [
@@ -240,16 +191,12 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
         else:
             spy_data = spy_data_raw
 
-    # Build date-to-index mappings for O(1) lookups (OPTIMIZATION: Task 3.1)
     with TimingContext("build_date_index"):
         spy_date_index = _build_date_index(spy_data)
         code_date_index = _build_date_index(code_data)
-        
-        # Also create sorted date lists for binary search fallback
         spy_dates_sorted = [bar.date for bar in spy_data]
         code_dates_sorted = [bar.date for bar in code_data]
     
-    # Pre-compute all indicators once for O(1) lookups
     with TimingContext("precompute_indicators"):
         from app.workers.algo_func.precomputed_indicators import OHLCV as PrecompOHLCV
         precomp_code = [PrecompOHLCV(b.date, b.open, b.high, b.low, b.close, b.volume) for b in code_data]
@@ -257,7 +204,6 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
         precomputed = PrecomputedIndicators(precomp_code, precomp_spy, params)
         precomputed.compute_all()
     
-    # Step 3.4.2 — Use initial_signal if provided, skip CSV re-read
     if initial_signal is not None:
         latest_signal = initial_signal
     else:
@@ -266,10 +212,8 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
             print(f"Немає сигналу для коду {code}, genome: {genome_id}")
             latest_signal = await get_data_and_save_to_csv(code, trade_date, genome_id, file_name=csv_file_name)
 
-    # Step 3.1.1 — Replace pd.to_datetime with string comparison (YYYY-MM-DD sorts lexicographically)
     _raw_td = str(latest_signal["tradeday"]).split("T")[0]
 
-    # Filter code_data for dates after latest_signal (only needed once)
     filtered_code_data = []
     for bar in code_data:
         if bar.date > _raw_td:
@@ -278,28 +222,19 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
     results_batch: List[Dict[str, Any]] = []
     total_days = len(filtered_code_data)
 
-    # Main processing loop with optimized filtering
     with TimingContext("main_signal_loop"):
         for day_index, bar in enumerate(filtered_code_data):
             if day_index % LOG_INTERVAL == 0 and day_index > 0:
                 logger.info(f'Progress: {day_index}/{total_days} days processed for {code}, genome: {genome_id}')
             
-            tradeday_str = bar.date  # Already in "YYYY-MM-DD" format
+            tradeday_str = bar.date
 
-            # OPTIMIZATION Task 3.2: O(1) index-based slicing instead of O(n) list comprehension
             spy_end_idx = _find_end_index(spy_date_index, spy_dates_sorted, tradeday_str, len(spy_data))
             code_end_idx = _find_end_index(code_date_index, code_dates_sorted, tradeday_str, len(code_data))
-            
-            # Slice up to and including the end index
-            filtered_spy = spy_data[:spy_end_idx + 1] if spy_end_idx >= 0 else []
-            filtered_code = code_data[:code_end_idx + 1] if code_end_idx >= 0 else []
 
             position_status = latest_signal["position_status"]
 
             if position_status == "F":
-                # Skip expensive energy computation on buy-only days —
-                # energy is only consumed by S9 (sell condition).
-                # E1–E5 columns are not used downstream for buy rows.
                 logger.info(f"Buy - {tradeday_str}")
                 buySignals = precomputed.run_all_buy_conditions_fast(code_end_idx)
                 buy = is_buy_fast(buySignals)
@@ -320,14 +255,14 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
                     "E4": 0,
                     "E5": 0,
                     "exit1": buySignals.get("stopLoss"),
-                    "entry_price": filtered_code[-1].close if filtered_code else None,
-                    "close": filtered_code[-1].close if filtered_code else None,
+                    "entry_price": code_data[code_end_idx].close if code_end_idx >= 0 else None,
+                    "close": code_data[code_end_idx].close if code_end_idx >= 0 else None,
                     "entry_date": 0,
                     "exit_price": exit_price 
                 }
                 latest_signal = {
                     "entry_date": tradeday_str,
-                    "entry_price": filtered_code[-1].close if filtered_code else 0,
+                    "entry_price": code_data[code_end_idx].close if code_end_idx >= 0 else 0,
                     "exit1": buySignals.get("stopLoss"),
                     "position_status": "I" if buy else "F",
                     "next_open_action": "B" if buy else "N",
@@ -335,11 +270,6 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
                 results_batch.append(result)
 
             elif position_status == "I":
-                # Energy needed for sell evaluation (S9)
-                energy_data = calculate_energy_indicators_last_16_days(
-                    tradeday_str, filtered_code, filtered_spy
-                )
-
                 entry_date = latest_signal.get("entry_date")
                 entry_price = latest_signal.get("entry_price")
 
@@ -347,22 +277,25 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
                     entry_date = tradeday_str
                     entry_price = bar.open
 
+                # O(1) buy-index lookup via pre-computed date map
+                buy_idx = precomputed.date_to_idx.get(entry_date, -1)
                 exit1 = to_float_or_none(latest_signal.get("exit1"))
-                sellSignals = runAllSellConditions(
-                    filtered_code,
-                    filtered_spy,
-                    entry_date,
-                    to_float_or_none(entry_price),
-                    exit1,
-                    tradeday_str,
-                    params,
-                    energy_data=energy_data,
+
+                # Pre-computed sell evaluation — all O(1) lookups
+                sellSignals = precomputed.run_all_sell_conditions_fast(
+                    code_end_idx, buy_idx, to_float_or_none(entry_price), exit1
                 )
+
+                # Pre-computed energy data for CSV output
+                energy_data = precomputed.get_energy_data(code_end_idx)
+
                 if ALGORITHM_DEBUG:
                     logger.debug(f'Trade day: {tradeday_str}, stock: {code}, genome: {genome_id}')
                     logger.debug(f'Sell signals: {sellSignals}')
+
                 sell = isSell(sellSignals['conditions'])
                 new_stop_loss = sellSignals['stop_loss']
+
                 result = {
                     "code": code,
                     "genome_id": genome_id,
@@ -376,7 +309,7 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
                     "E5": energy_data["E5"],
                     "exit1": new_stop_loss,
                     "entry_price": entry_price,
-                    "close": filtered_code[-1].close if filtered_code else None,
+                    "close": code_data[code_end_idx].close if code_end_idx >= 0 else None,
                     "entry_date": entry_date,
                     "exit_price": 0
                 }
@@ -388,7 +321,7 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
                     "next_open_action": "S" if sell else "N",
                 }
                 results_batch.append(result)
-    
+
     logger.info(f'Task completed for {code}, genome: {genome_id} | Total days: {total_days} | Results: {len(results_batch)}')
             
     if len(results_batch) > 0:
@@ -403,12 +336,11 @@ def to_float_or_none(v):
     s = str(v).strip()
     if s == "" or s.lower() in ("none", "nan"):
         return None
-    
     s = s.replace(" ", "").replace(",", ".")
     try:
         return float(s)
     except ValueError:
-        return None            
+        return None
 
 
 async def append_to_signals_csv(
@@ -416,7 +348,6 @@ async def append_to_signals_csv(
     file_name,
     file_service: "FileService" = None,
 ) -> bool:
-   
     if file_service is None:
         file_service = FileService()
 
@@ -461,7 +392,7 @@ async def get_latest_signal(
     genome_id: str = None,
 ) -> Optional[Dict[str, Any]]:
     file_name = code
-    
+
     if file_service is None:
         file_service = FileService()
 
@@ -470,10 +401,8 @@ async def get_latest_signal(
         print(f"Немає записів у файлі data/{file_name}.csv")
         return None
 
-    # Filter by code
     filtered = [r for r in rows if r.get("code") == code]
-    
-    # For optimization runs, filter by genome_id to get fresh start for each genome
+
     if genome_id:
         filtered = [r for r in filtered if r.get("genome_id") == genome_id]
     
@@ -622,11 +551,11 @@ async def format_signals_csv_inplace(
         result_rows,
         columns=["Genome ID", "Buy Signal", "Stop Signal", "Entry price", "Exit price", "Gain/Lose"]
     )
-    
+
     cutoff = pd.to_datetime(START_DATE)
     buy_dt = pd.to_datetime(out_df["Buy Signal"], errors="coerce")
     stop_dt = pd.to_datetime(out_df["Stop Signal"], errors="coerce")
-    
+
     mask = (buy_dt >= cutoff) & (
         (out_df["Stop Signal"] == "Open position") | (stop_dt >= cutoff)
     )
