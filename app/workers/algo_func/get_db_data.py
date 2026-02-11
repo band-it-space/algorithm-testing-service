@@ -95,11 +95,10 @@ async def init_db_pool():
         )
         print("✅ MySQL connection pool initialized")
 
-async def get_stock_data_from_db(code: str, end_date: str | None = None):
+async def get_stock_data_from_db(code: str, end_date: str | None = None, return_ohlcv: bool = False):
     """Отримати дані про акції з API з підтримкою кешування."""
     cache = _get_cache_service()
 
-    # Try to get from cache first
     if cache:
         try:
             from app.services.data_cache_service import OHLCV
@@ -107,6 +106,8 @@ async def get_stock_data_from_db(code: str, end_date: str | None = None):
 
             if cached_data is not None:
                 logger.debug(f"Cache HIT for stock {code}")
+                if return_ohlcv:
+                    return cached_data  # Return OHLCV objects directly — skip dict conversion
                 return [
                     {
                         "date": bar.date,

@@ -579,6 +579,8 @@ def runAllBuyConditions(ohlcv: List[OHLCV], targetDate: str, spyData: List[OHLCV
                         params: AlgorithmParameters = None) -> Dict[str, Union[bool, float]]:
     if params is None:
         params = AlgorithmParameters()
+        
+    logger.info(f"Buy - {targetDate}")
     
     return {
         'B1':  checkB1(ohlcv, targetDate, params),

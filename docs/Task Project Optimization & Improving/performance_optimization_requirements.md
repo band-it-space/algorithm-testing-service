@@ -20,7 +20,7 @@ Profiling and code review identified three dominant bottlenecks:
 
 ### Phased Approach
 
-The optimization is split into 4 independent phases. Each phase is self-contained — it can be implemented, tested, and merged individually without depending on other phases. Phases are ordered by expected impact (highest first).
+The optimization is split into 7 independent phases. Each phase is self-contained — it can be implemented, tested, and merged individually without depending on other phases. Phases are ordered by expected impact (highest first).
 
 ---
 
@@ -477,98 +477,698 @@ In `signals_for_the_period()`, use `initial_signal` as `latest_signal` instead o
 
 ---
 
-## Phase 4 — Fix Concurrency Model
+
+## Phase 5 — Pre-Compute Sell-Side ATR and Rolling Window Arrays
 
 ### Goal
 
-Switch from thread-based to process-based parallelism for CPU-bound work, eliminating GIL contention. Optionally remove unnecessary async/event loop overhead.
+Replace the per-day O(n) ATR and rolling-window recomputations inside sell conditions (S4–S17) with O(1) pre-computed array lookups. This addresses the >90% of remaining per-sell-day cost that comes from full-pass ATR, SMA, TR, and rolling max/min recalculations.
 
-**Expected speedup:** Near-linear scaling with CPU cores (currently ~0% benefit from threads → potential ~5× with 8 cores fully utilized).
+**Expected speedup:** ~3–5× on sell-day cost, ~2–3× on total genome time (from ~133s to ~40–60s).
 
 ### Background
 
-`ConcurrentWorker` (concurrent_worker.py) uses `ThreadPoolExecutor` with `concurrent_tasks` threads. The algorithm computation is purely CPU-bound Python — indicator calculations, list comprehensions, sorting. Python's GIL allows only one thread to execute Python bytecode at a time, making multithreading counterproductive for CPU work — the threads add context-switching overhead without gaining parallelism.
+After Phases 1–3, the buy path uses O(1) lookups via `PrecomputedIndicators`, but every sell condition still recomputes indicator arrays from scratch on every I-day. Profiling shows:
 
-Current setup: 8 workers (processes) × 5 threads = 40 logical workers, but effective CPU parallelism = 8 (one per process, the threads fight over each process's GIL).
+| Sell function | Indicator recomputed from scratch | Approximate cost per call |
+|---|---|---|
+| S5 | `atr(ohlcv, 20)` — Wilder's ATR, full series | O(n) |
+| S7 | `atr(data, 22)` — Wilder's ATR, full series | O(n) |
+| S8 | `calc_tr_series()` + `sma(trs, 22)` + `sma(trs, 100)` — SMA-based ATR | O(n) |
+| S10 | `atr(data, 10)` + `atr(data, 100)` + `max(highs[-91:-1])` | O(n) |
+| S16 | `calc_tr_series()` + `atr(data, 22)` | O(n) |
+| S4 | `sma(closes, 150)` — SMA of all closes | O(n) |
+| S6 | `max(highs[-90:])` + argmax scan | O(window) |
+| S13 | `min(closes[-80:])` | O(window) |
+| S17 | `max(highs[-150:])` + `min(lows[-150:])` | O(window) |
+| S11/S12 | `max(highs[-250:])` + `min(lows[-250:])` × yy_days | O(window × yy_days) |
+| S14 | Timestamp alignment + 3 period ratios | O(n) |
+| S15 | `close[-1]/close[-5]` | O(1) — already cheap |
+
+Additionally, every sell function that needs `buy_idx` performs an O(n) linear scan over OHLCV dates to find the buy entry index, repeated 7+ times per sell-day.
 
 ### Tasks
 
-#### 4.1 Set Threads to 1 (Zero-Code-Change Option)
+#### 5.1 Add ATR Arrays (Wilder's Smoothing)
 
-**Simplest fix:** Change `ALGORITHM_CONCURRENT_TASKS` from 5 to 1 via environment variable. This eliminates GIL contention immediately.
+**Problem:** ATR is recomputed from scratch in S5 (period 20), S7 (period 22), S10 (period 10 and 100), S16 (period 22). Each call processes the full O(n) OHLCV series.
 
-**Compensate:** Increase `ALGORITHM_WORKER_COUNT` to equal the number of available CPU cores (e.g., 8 or 10). Each worker process has its own GIL and can run at full speed.
+**Existing bug:** `self.atr_s5` in `PrecomputedIndicators` is computed with hardcoded period `22` (`precomputed_indicators.py`, line 222: `self.atr_s5 = self._atr_full(self.highs, self.lows, self.closes, 22)`), but S5 uses `params.input_S5_atr_period` which defaults to **20**. This must be corrected.
 
-**Required change (environment/config only):**
-```
-ALGORITHM_WORKER_COUNT=8    # or number of CPU cores
-ALGORITHM_CONCURRENT_TASKS=1
-```
+**Required arrays to add in `compute_all()`:**
 
-**Acceptance criteria:** Total throughput improves. Each worker process runs at full single-thread speed without contention.
-
-#### 4.2 Remove Per-Job Event Loop Creation
-
-**Problem:** Each job creates and destroys an asyncio event loop (concurrent_worker.py, lines 43–47):
 ```python
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-try:
-    result = loop.run_until_complete(func(*args, **kwargs))
-finally:
-    loop.close()
+# === Sell-side ATR (Wilder's) ===
+s5_atr_period = getattr(p, 'input_S5_atr_period', 20)
+s7_atr_period = getattr(p, 'input_S7_atr_period', 22)
+
+self.atr_s5 = self._atr_full(self.highs, self.lows, self.closes, s5_atr_period)  # Fix: was hardcoded 22
+self.atr_s7 = self._atr_full(self.highs, self.lows, self.closes, s7_atr_period)  # S7, S16
+self.atr_10 = self._atr_full(self.highs, self.lows, self.closes, 10)             # S10
+self.atr_100 = self._atr_full(self.highs, self.lows, self.closes, 100)           # S10
 ```
 
-With `ALGORITHM_CONCURRENT_TASKS=1`, only one job runs at a time per process, so the event loop is created/destroyed sequentially for every single genome.
+**Note:** If `s7_atr_period == s1_atr_period`, the same array can be reused. Use `self.atr_s1` for S7/S16 if periods match; otherwise create `self.atr_s7` separately.
 
-**Required change:** Create a single event loop per worker process and reuse it:
+**Acceptance criteria:** For stock 3888, genome G_000, ATR values from pre-computed arrays must match the per-call `atr()` results for every sell-day to within ±1e-10. Validated via the energy+sell parity test (Task 5.8).
+
+#### 5.2 Add SMA-of-TR Arrays for S8
+
+**Problem:** S8 uses `sma(calc_tr_series(data), 22)` and `sma(calc_tr_series(data), 100)` — this is **simple moving average** of True Range, NOT Wilder's smoothing. The existing `_atr_full()` method uses Wilder's smoothing and produces different values.
+
+**Required:** Add a new helper method `_sma_tr_full(period)` and pre-compute two arrays:
+
 ```python
-class ConcurrentWorker:
-    def __init__(self, ...):
-        ...
-        self._loop = None
-
-    def _get_loop(self):
-        if self._loop is None or self._loop.is_closed():
-            self._loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self._loop)
-        return self._loop
-
-    def process_job(self, job):
-        ...
-        if inspect.iscoroutinefunction(func):
-            loop = self._get_loop()
-            result = loop.run_until_complete(func(*args, **kwargs))
-        ...
+def _sma_tr_full(self, period: int) -> np.ndarray:
+    """Calculate SMA-based ATR (simple moving average of True Range).
+    
+    This matches sell_signals.py's sma(calc_tr_series(data), period)
+    which is different from Wilder's smoothing used in _atr_full().
+    
+    The TR series has n-1 elements (no TR for the first bar).
+    The SMA starts producing values at index (period-1) of the TR array,
+    which corresponds to index (period) of the original OHLCV array.
+    """
+    n = len(self.closes)
+    result = np.full(n, np.nan)
+    
+    if n < period + 1:
+        return result
+    
+    # True Range series (n-1 elements, offset by 1 from price array)
+    prev_close = np.roll(self.closes, 1)
+    prev_close[0] = self.closes[0]
+    tr = np.maximum(
+        self.highs[1:] - self.lows[1:],
+        np.maximum(
+            np.abs(self.highs[1:] - prev_close[1:]),
+            np.abs(self.lows[1:] - prev_close[1:])
+        )
+    )
+    
+    # SMA of TR
+    sma_vals = pd.Series(tr).rolling(period).mean().values
+    
+    # Align: TR[0] corresponds to OHLCV[1], so SMA_TR[i] → result[i+1]
+    for i in range(len(sma_vals)):
+        if not np.isnan(sma_vals[i]):
+            result[i + 1] = sma_vals[i]
+    
+    return result
 ```
 
-**Note:** If no `async` operations in the worker actually perform true I/O (currently they don't — the `await` calls are over synchronous `requests.get()` wrapped in async), consider making the worker functions synchronous entirely in a future refactor to eliminate async overhead completely. This is out of scope for this phase (changes function signatures across the codebase).
+**Pre-compute in `compute_all()`:**
+```python
+# === S8: SMA-based ATR (NOT Wilder's) ===
+self.sma_tr_22 = self._sma_tr_full(22)
+self.sma_tr_100 = self._sma_tr_full(100)
+self.rolling_max_sma_tr_22 = self._rolling_max(self.sma_tr_22, p.input_S8_atr22_window)  # default 126
+```
 
-**Acceptance criteria:** Worker behavior unchanged. Event loop overhead eliminated.
+**Critical distinction:** The original sell_signals.py `atr()` function (used by S5, S7, S10, S16) uses **Wilder's smoothing**: `atr[i] = (atr[i-1] * (period-1) + tr[i]) / period`. The `sma()` function used by S8 computes a **simple moving average**: `sum(tr[i-period+1:i+1]) / period`. These produce different values and must use different pre-computed arrays.
 
-#### 4.3 Reduce Polling Interval
+**Index alignment:** The original code's `calc_tr_series(data)` returns `n-1` values (starting from `data[1]`). Then `sma(trs, 22)` returns `len(trs) - 22 + 1` values starting from `trs[21]`. The first SMA value corresponds to OHLCV index `22`. The original then accesses `atr22[-1]` (last element) and `atr22[-atr22_window:]` (last 126 elements). Must verify that `self.sma_tr_22[idx]` produces the same value as `sma(calc_tr_series(data[:idx+1]), 22)[-1]` for every `idx`.
 
-**Problem:** The work loop (concurrent_worker.py, line 101) sleeps `0.1s` between checking for completed futures and `0.5s` when no jobs are active (line 95). With `concurrent_tasks=1`, the `0.1s` sleep adds a flat 100ms latency after each job completes before the next one starts.
+**Acceptance criteria:** `self.sma_tr_22[idx]` matches `sma(calc_tr_series(ohlcv[:idx+1]), 22)[-1]` for all sell-days. Validated via the sell parity test.
 
-**Required change:**
-- Reduce active polling from `0.1s` to `0.01s` or remove it when `concurrent_tasks == 1` (single sequential loop with blocking queue pop).
-- Keep `0.5s` for idle polling (no jobs available).
+#### 5.3 Add Rolling Window Arrays for S6, S10, S13, S17
 
-**Acceptance criteria:** Reduced latency between job completions. No busy-wait.
+**Required arrays:**
+
+```python
+# === Rolling windows for sell conditions ===
+self.rolling_max_high_90 = self._rolling_max(self.highs, 90)                    # S6, S10
+self.rolling_max_high_150 = self._rolling_max(self.highs, p.input_S17_min_days) # S17 (default 150)
+self.rolling_min_low_150 = self._rolling_min(self.lows, p.input_S17_min_days)   # S17 (default 150)
+self.rolling_min_close_80 = self._rolling_min(self.closes, p.input_S13_lookback) # S13 (default 80)
+self.rolling_max_high_5 = self._rolling_max(self.highs, 5)                      # E5
+self.rolling_min_low_5 = self._rolling_min(self.lows, 5)                        # E5
+```
+
+**Note on offsets:** Several sell functions use windows that exclude the current bar:
+- **S6:** `highs[start_window:last_idx + 1]` — includes current bar. Maps to `rolling_max_high_90[idx]`.
+- **S10:** `data[-91:-1]` — excludes current bar (90 bars ending at `idx-1`). Must use `rolling_max_high_90[idx - 1]`.
+- **S13:** `data[last_idx - lookback : last_idx]` — excludes current bar. Must use a shifted rolling min or `rolling_min(closes, lookback)` at index `idx - 1`.
+
+These offset differences are critical for parity and must be verified per-function.
+
+#### 5.4 Add Date-to-Index Map and S6 Days-Since-High
+
+**Buy-index lookup:**
+```python
+# O(1) buy-date → index lookup (replaces 7+ linear scans per sell-day)
+self.date_to_idx = {d: i for i, d in enumerate(self.dates)}
+```
+
+This replaces the `to_ts(buy_date)` + linear search pattern used in S4, S5, S6, S13, S14, S16, S17.
+
+**S6 days-since-high:** S6 needs the number of days since the most recent 90-day high — specifically, `last_idx - last_high_idx` where `last_high_idx` is the last index that achieved the rolling 90-day max. This requires a custom helper:
+
+```python
+def _rolling_days_since_max(self, values: np.ndarray, period: int) -> np.ndarray:
+    """For each index i, compute i - j where j is the latest index in [i-period+1, i]
+    at which values[j] == rolling_max(values, period)[i]."""
+    n = len(values)
+    result = np.full(n, np.nan)
+    for i in range(period - 1, n):
+        window_start = i - period + 1
+        max_val = values[window_start]
+        max_idx = window_start
+        for j in range(window_start + 1, i + 1):
+            if values[j] >= max_val:
+                max_val = values[j]
+                max_idx = j
+        result[i] = i - max_idx
+    return result
+
+# Pre-compute:
+self.days_since_high_90 = self._rolling_days_since_max(self.highs, p.input_S6_high_window)  # default 90
+```
+
+#### 5.5 Add Fibonacci Ratio and Consecutive-Day Arrays for S11/S12
+
+**Fibonacci ratio:**
+```python
+# fibo_ratio[i] = (high250[i] - close[i]) / (high250[i] - low250[i])
+# where high250 = rolling_max_250, low250 = rolling_min_250 (already pre-computed)
+with np.errstate(divide='ignore', invalid='ignore'):
+    range_250 = self.rolling_max_250 - self.rolling_min_250
+    self.fibo_ratio_250 = np.where(
+        range_250 > 0,
+        (self.rolling_max_250 - self.closes) / range_250,
+        np.nan
+    )
+```
+
+**Boolean threshold arrays:**
+```python
+self.fibo_above_382 = self.fibo_ratio_250 > p.input_S11_fib_level   # default 0.382
+self.fibo_above_236 = self.fibo_ratio_250 > p.input_S12_fib_level   # default 0.236
+```
+
+**Consecutive-day arrays:** S11 requires the fibo condition to be True for 2 consecutive days. S12 requires it for 22 consecutive days. Pre-compute rolling "all True in last N" arrays:
+
+```python
+def _rolling_all_true(self, bools: np.ndarray, window: int) -> np.ndarray:
+    """True at index i if bools[i-window+1 : i+1] are all True."""
+    n = len(bools)
+    result = np.full(n, False)
+    count = 0
+    for i in range(n):
+        if bools[i]:
+            count += 1
+        else:
+            count = 0
+        if count >= window:
+            result[i] = True
+    return result
+
+self.fibo_consec_s11 = self._rolling_all_true(self.fibo_above_382, p.input_S11_yy_days)  # default 2
+self.fibo_consec_s12 = self._rolling_all_true(self.fibo_above_236, p.input_S12_yy_days)  # default 22
+```
+
+**Note:** The original `fibo_exit_stop()` requires `n >= 250`, `bars_since_entry > xx_days`, and evaluates `below_fibo_level` for the last `yy_days` bars. The pre-computed `fibo_consec_s11[idx]` gives the answer for whether all `yy_days` bars ending at `idx` satisfy the condition. The `bars_since_entry > xx_days` guard remains in the fast lookup method (trade-specific, O(1)).
+
+#### 5.6 Add S14 Period Ratios
+
+**Required:**
+```python
+# S14 relative performance: stock vs SPY at horizons 35, 70, 105
+self.stock_ratio_35, self.index_ratio_35 = self._calc_period_ratios(self.closes, self.spy_closes, 35)
+self.stock_ratio_70, self.index_ratio_70 = self._calc_period_ratios(self.closes, self.spy_closes, 70)
+self.stock_ratio_105, self.index_ratio_105 = self._calc_period_ratios(self.closes, self.spy_closes, 105)
+```
+
+**Note:** The existing `_calc_period_ratios()` method handles stock/SPY date alignment via exact string match with bisect fallback, which matches S14's alignment logic (S14 uses `to_ts()` timestamp matching, but since dates are YYYY-MM-DD strings that map 1:1 to timestamps, the results are equivalent). Verify numerically.
+
+**Parameterization:** S14's horizons come from `params.input_S14_horizons` (default `[35, 70, 105]`). The pre-computed arrays should use these values:
+```python
+for horizon in p.input_S14_horizons:
+    stock_r, idx_r = self._calc_period_ratios(self.closes, self.spy_closes, horizon)
+    self.s14_stock_ratios[horizon] = stock_r
+    self.s14_index_ratios[horizon] = idx_r
+```
+
+#### 5.7 Add Fast Sell-Condition Lookup Methods
+
+Add methods to `PrecomputedIndicators` that replace the per-call O(n) computations with O(1) array lookups. Each method handles only the indicator-heavy part; trade-specific logic (buy_idx, days_since_buy guards) remains as cheap arithmetic.
+
+```python
+def get_s4_condition(self, idx: int, buy_idx: int, buy_price: float) -> bool:
+    """S4: SMA ratio + gain check within max_days window after buy."""
+    ...
+
+def get_s5_condition(self, idx: int, buy_idx: int, buy_price: float,
+                     stop_loss: float) -> Tuple[bool, float]:
+    """S5: Trailing stop with ATR push-up on key days. Returns (exit_signal, new_stop_loss)."""
+    ...
+
+def get_s6_condition(self, idx: int, buy_idx: int) -> bool:
+    """S6: Days since most recent 90-day high."""
+    ...
+
+def get_s7_condition(self, idx: int) -> bool:
+    """S7: Two consecutive large bearish bodies > body_mult * ATR(22)."""
+    ...
+
+def get_s8_condition(self, idx: int) -> bool:
+    """S8: ATR(100) SMA > threshold * max(ATR(22) SMA, 126) + bearish body count."""
+    ...
+
+def get_s10_condition(self, idx: int) -> bool:
+    """S10: ATR(10) > atr_ratio * ATR(100) + drawdown from 90-day high."""
+    ...
+
+def get_s11_condition(self, idx: int, buy_idx: int) -> bool:
+    """S11: Fibonacci level (0.382) for 2 consecutive days after 300 bars."""
+    ...
+
+def get_s12_condition(self, idx: int, buy_idx: int) -> bool:
+    """S12: Fibonacci level (0.236) for 22 consecutive days after 240 bars."""
+    ...
+
+def get_s13_condition(self, idx: int, buy_idx: int) -> bool:
+    """S13: Close < min(close, 80) after min_days since buy."""
+    ...
+
+def get_s14_condition(self, idx: int, buy_idx: int) -> bool:
+    """S14: Underperforming SPY at all three horizons after min_days."""
+    ...
+
+def get_s15_condition(self, idx: int) -> bool:
+    """S15: Crash drop — close/close[idx-lookback] < -crash_drop."""
+    ...
+
+def get_s16_condition(self, idx: int, buy_idx: int) -> bool:
+    """S16: Big price drop + ATR volatility spike."""
+    ...
+
+def get_s17_condition(self, idx: int, buy_idx: int) -> bool:
+    """S17: Wide range + near bottom."""
+    ...
+```
+
+Each method uses only pre-computed arrays (O(1) lookups) and trade-specific parameters passed as arguments.
+
+#### 5.8 Add `run_all_sell_conditions_fast()` Method
+
+Add a single entry point that mirrors the existing `runAllSellConditions()` in `sell_signals.py`:
+
+```python
+def run_all_sell_conditions_fast(self, idx: int, buy_idx: int, buy_price: float,
+                                  stop_loss: float) -> Dict[str, Any]:
+    """Run all sell conditions using pre-computed indicators.
+    
+    Drop-in replacement for sell_signals.runAllSellConditions().
+    Returns {"conditions": {...}, "stop_loss": new_stop} — same format.
+    """
+    p = self.params
+
+    # S5 MUST always run — it returns updated stop_loss
+    s5_exit, new_stop = self.get_s5_condition(idx, buy_idx, buy_price, stop_loss)
+
+    ordered_checks = [
+        ("S1",  lambda: self.closes[idx] <= stop_loss if np.isfinite(stop_loss) else False),
+        ("S15", lambda: self.get_s15_condition(idx)),
+        ("S5",  lambda: s5_exit),
+        ("S7",  lambda: self.get_s7_condition(idx)),
+        ("S9",  lambda: self.get_s9_condition(idx)),
+        ("S17", lambda: self.get_s17_condition(idx, buy_idx)),
+        ("S13", lambda: self.get_s13_condition(idx, buy_idx)),
+        ("S10", lambda: self.get_s10_condition(idx)),
+        ("S8",  lambda: self.get_s8_condition(idx)),
+        ("S6",  lambda: self.get_s6_condition(idx, buy_idx)),
+        ("S4",  lambda: self.get_s4_condition(idx, buy_idx, buy_price)),
+        ("S16", lambda: self.get_s16_condition(idx, buy_idx)),
+        ("S11", lambda: self.get_s11_condition(idx, buy_idx)),
+        ("S12", lambda: self.get_s12_condition(idx, buy_idx)),
+        ("S14", lambda: self.get_s14_condition(idx, buy_idx)),
+    ]
+
+    conditions = {}
+    for key, check_fn in ordered_checks:
+        result = check_fn()
+        conditions[key] = result
+        if result:
+            for remaining_key, _ in ordered_checks:
+                if remaining_key not in conditions:
+                    conditions[remaining_key] = False
+            break
+
+    return {"conditions": conditions, "stop_loss": new_stop}
+```
+
+Also add an energy lookup method for CSV output:
+
+```python
+def get_energy_data(self, idx: int) -> Dict[str, Any]:
+    """Return energy data dict for CSV output (E1–E5 + energy_score)."""
+    return {
+        "energy_score": self.energy_score[idx] if not np.isnan(self.energy_score[idx]) else 0,
+        "E1": str(int(self.e1[idx])) if idx < len(self.e1) else "0",
+        "E2": str(int(self.e2[idx])) if idx < len(self.e2) else "0",
+        "E3": str(int(self.e3[idx])) if idx < len(self.e3) else "0",
+        "E4": str(int(self.e4[idx])) if idx < len(self.e4) else "0",
+        "E5": str(int(self.e5[idx])) if idx < len(self.e5) else "0",
+    }
+```
+
+#### 5.9 Sell Parity Test
+
+**Required:** Build a validation test `tests/test_sell_precomputed_parity.py` that:
+1. Runs the full pipeline with `process_algorithm_task()` using the new pre-computed sell path.
+2. Compares the final formatted trade CSV against `tests/test_data/reference/final_trades_reference.csv`.
+3. All 10 trade rows must match exactly: `Genome ID`, `Buy Signal`, `Stop Signal`, `Entry price`, `Exit price`, `Gain/Lose`.
+
+**Extended validation (optional but recommended):** For every sell-day, compare `run_all_sell_conditions_fast()` output against `runAllSellConditions()` for the same inputs. This catches any per-condition discrepancy before it compounds into a trade-level difference.
+
+```bash
+docker cp tests/test_sell_precomputed_parity.py hk-algo-improve-algorithm-worker-1:/app/tests/
+docker-compose exec algorithm-worker python tests/test_sell_precomputed_parity.py
+```
+
+**Gate:** Must print `PASS` with all 10 trade rows identical to reference.
 
 ### Files Modified
 
 | File | Change |
 |------|--------|
-| `app/workers/concurrent_worker.py` | Reuse event loop, reduce polling |
-| Environment / docker-compose.yml | Set ALGORITHM_CONCURRENT_TASKS=1, adjust ALGORITHM_WORKER_COUNT |
+| `app/workers/algo_func/precomputed_indicators.py` | Add sell-side arrays, new helpers, fast sell methods |
+| `tests/test_sell_precomputed_parity.py` | New: validate sell pre-computation against reference |
 
 ### Risks
 
-- **Memory per process:** Each worker process has its own memory space. If `ALGORITHM_WORKER_COUNT` is set too high, total memory usage may exceed available RAM (each process holds OHLCV data arrays, precomputed indicators, etc.). Monitor memory with `docker stats` after changes.
-- **Redis connection limits:** More worker processes = more Redis connections. Ensure Redis `maxclients` can handle `ALGORITHM_WORKER_COUNT × 2` (one for queue, one for cache).
+- **SMA-TR vs Wilder ATR confusion:** S8 uses SMA-of-TR while S5/S7/S10/S16 use Wilder's ATR. Using the wrong array type would produce silent parity failures. The implementation MUST use `_sma_tr_full()` for S8 and `_atr_full()` for the others.
+- **Rolling window offset errors:** S10 uses `data[-91:-1]` (excluding current bar) while S6 uses `data[-90:]` (including current bar). Off-by-one in the pre-computed array index would flip individual sell decisions. Each function's offset must be verified against the original.
+- **S5 statefulness:** S5's stop-loss update depends on the previous stop_loss value chained across days. The ATR lookup is O(1) but the key-day logic and stop accumulation are inherently sequential. The pre-computed method only eliminates the ATR recomputation, not the sequential logic.
+- **atr_s5 period bug:** The existing `atr_s5` uses hardcoded period 22 instead of `params.input_S5_atr_period` (default 20). Fixing this changes the pre-computed array values. Since S5 wasn't previously using the pre-computed array, this fix is safe — but must be validated.
 
 ---
+
+## Phase 6 — Pre-Compute Energy Indicators (E1–E5)
+
+### Goal
+
+Replace the per-sell-day O(n) energy computation (`calculate_energy_indicators_last_16_days()`) with O(1) pre-computed array lookups. Energy computation is the single most expensive operation remaining after Phase 5, accounting for ~80% of sell-day cost.
+
+**Expected speedup:** ~5–10× on sell-day cost when combined with Phase 5, bringing total pipeline to ~15–25s.
+
+### Background
+
+`calculate_energy_indicators_last_16_days()` (`get_code_energy.py`) computes five sub-indicators (E1–E5) for the last 16 trading days, sums them, and divides by 16 to produce `energy_score`. On each call it:
+
+1. **Re-filters** the full stock/SPY dataset from `trade_day - 24 months` via `process_stock_data()` — O(n) date parsing and filtering.
+2. **Recomputes RSI(10)** from scratch 16 times — once for each of the 16 lookback days, each time starting from index 0 of the filtered data.
+3. **Recomputes StochRSI(10)** from each RSI result.
+4. **Scans** rolling max/min windows (20-day high, 5-day range, 250-day high, 66-day slope, 33-day performance) 16 times.
+
+Pre-computing E1–E5 as boolean arrays and `energy_score` as a rolling-sum array eliminates all this redundancy.
+
+### Tasks
+
+#### 6.1 Pre-Compute E1 Boolean Array
+
+**E1 formula:** "New high in past 20 days AND close is in upper 35% of day's range."
+```
+E1[idx] = (high[idx] > max(high[idx-20 : idx]))   # 20-bar max EXCLUDING current bar
+       AND (close[idx] > low[idx] + 0.65 * (high[idx] - low[idx]))
+```
+
+**Implementation:**
+```python
+# E1: note rolling_max_20 includes current bar, so use [idx-1] for "past 20 not including current"
+self.e1 = np.zeros(self.n, dtype=np.int8)
+for i in range(66, self.n):
+    if i >= 20:
+        max_high_20_excl = self.rolling_max_20[i - 1]  # max of highs[i-20 : i]
+        cond_high = self.highs[i] > max_high_20_excl
+        cond_close = self.closes[i] > self.lows[i] + 0.65 * (self.highs[i] - self.lows[i])
+        if cond_high and cond_close:
+            self.e1[i] = 1
+```
+
+**Edge case:** When `i < 20`, the original uses `max(high[max(0, idx-20) : idx])`. Since `idx >= 66` is required by the original code, this is always satisfied.
+
+**Note on `rolling_max_20`:** The existing `self.rolling_max_20 = self._rolling_max(self.highs, 20)` computes `pd.Series(highs).rolling(20).max()`, where `rolling_max_20[i]` is `max(highs[i-19:i+1])` — the 20-bar max **including** the current bar. The original E1 code uses `max(high[idx-20:idx])` — the 20-bar max **excluding** the current bar. So:
+- `rolling_max_20[i-1]` = `max(highs[i-20:i])` = what E1 needs.
+- This is correct as long as `i >= 20`. For `i < 20`, `rolling_max_20[i-1]` is NaN, but the `i >= 66` guard prevents this.
+
+#### 6.2 Pre-Compute E2 Boolean Array (RSI Convergence)
+
+**E2 formula:** "StochRSI(10) > 0.5"
+
+**Problem:** The original energy function computes RSI on data filtered to a 24-month window (`trade_day - 24 months`). `PrecomputedIndicators._rsi_full()` computes RSI on the **full dataset**. Since RSI uses Wilder's smoothing (an exponential moving average), the starting point affects all subsequent values.
+
+**Resolution — convergence:** Wilder's smoothing has effective memory of ~3× period bars. For RSI(10), values converge within ~30 bars regardless of starting point. The 24-month window provides ~500 trading days of history before the 16-day evaluation window. After 500 bars of identical price data, the RSI values from full-dataset and 24-month-filtered starting points are identical to machine precision (~1e-14). The boolean threshold `> 0.5` is therefore safe.
+
+**Implementation:** Use the existing `self.stochrsi_10` array directly:
+```python
+self.e2 = np.zeros(self.n, dtype=np.int8)
+for i in range(66, self.n):
+    if not np.isnan(self.stochrsi_10[i]) and self.stochrsi_10[i] > 0.5:
+        self.e2[i] = 1
+```
+
+**Validation:** Run the energy parity sub-test (Task 6.6) which compares pre-computed E2 values against the original `calculate_energy_indicators_last_16_days()` output for every sell-day. If any discrepancy is found, fall back to computing RSI on the 24-month-filtered window (more complex but exact).
+
+#### 6.3 Pre-Compute E3, E4, E5 Boolean Arrays
+
+**E3 formula:** "Slope(Close, 66) > 0" — simplifies to `close[idx] > close[idx - 66]`:
+```python
+self.e3 = np.zeros(self.n, dtype=np.int8)
+for i in range(66, self.n):
+    if self.closes[i] > self.closes[i - 66]:
+        self.e3[i] = 1
+```
+
+**E4 formula:** "33-day stock performance > 33-day SPY performance":
+```python
+# Use _calc_period_ratios for stock/SPY alignment
+self.stock_ratio_33, self.spy_ratio_33 = self._calc_period_ratios(self.closes, self.spy_closes, 33)
+
+self.e4 = np.zeros(self.n, dtype=np.int8)
+for i in range(66, self.n):
+    if (not np.isnan(self.stock_ratio_33[i]) and
+        not np.isnan(self.spy_ratio_33[i]) and
+        self.stock_ratio_33[i] > self.spy_ratio_33[i]):
+        self.e4[i] = 1
+```
+
+**Note on E4 alignment:** The original uses `sdate_spy.index(sdate[idx])` for exact date string matching. `_calc_period_ratios()` uses exact string matching with bisect fallback. These produce identical results when the date exists in both series (which is common for stock and SPY on the same exchange). The bisect fallback handles missing dates gracefully. Verify numerically in the parity test.
+
+**E5 formula:** Three sub-conditions: (1) close is in upper half of 5-day range, (2) close > close 5 days ago, (3) close within 7% of 250-day high:
+```python
+self.e5 = np.zeros(self.n, dtype=np.int8)
+for i in range(66, self.n):
+    if i < 5:
+        continue
+    min5 = self.rolling_min_low_5[i]     # min(low[i-4:i+1])
+    max5 = self.rolling_max_high_5[i]     # max(high[i-4:i+1])
+    max250 = self.rolling_max_250[i]      # max(high[i-249:i+1])
+    
+    if np.isnan(min5) or np.isnan(max5) or np.isnan(max250):
+        continue
+    
+    cond1 = (self.closes[i] - min5) / (max5 - min5) > 0.5 if max5 != min5 else False
+    cond2 = self.closes[i] > self.closes[i - 5]
+    cond3 = (max250 - self.closes[i]) / max250 < 0.07 if max250 != 0 else False
+    
+    if cond1 and cond2 and cond3:
+        self.e5[i] = 1
+```
+
+**Note:** The original E5 uses `highest(high, 250)` — `max(high[idx-249:idx+1])`. The pre-computed `rolling_max_250[i]` = `pd.Series(highs).rolling(250).max()[i]` = `max(highs[i-249:i+1])`. These are identical.
+
+#### 6.4 Pre-Compute Energy Score as Rolling Sum
+
+**Formula:** `energy_score[i] = sum(e1[j] + e2[j] + e3[j] + e4[j] + e5[j] for j in range(i-15, i+1)) / 16`
+
+```python
+# Total energy per day (0–5)
+self.e_total = self.e1 + self.e2 + self.e3 + self.e4 + self.e5
+
+# Rolling 16-day sum divided by 16
+e_series = pd.Series(self.e_total.astype(np.float64))
+self.energy_score = (e_series.rolling(16, min_periods=16).sum() / 16.0).values
+```
+
+The `get_s9_condition()` method becomes:
+```python
+def get_s9_condition(self, idx: int) -> bool:
+    """S9: energy_score < threshold."""
+    if idx >= self.n or np.isnan(self.energy_score[idx]):
+        return False
+    return self.energy_score[idx] < self.params.input_S9_energy_thresh
+```
+
+#### 6.5 Handle the `idx < 66` Guard
+
+The original energy code skips E1–E5 computation when `idx < 66`, outputting `"N/A"` for all indicators. `"N/A"` values are excluded from the energy_score sum but the denominator remains 16. In practice, since the trading range starts at 2016-01-01 and the stock data extends back well before that, all evaluation-range indices are well above 66. The pre-computed arrays use `int8` with value 0 for indices < 66, matching the effect of excluding N/A (0 contributes nothing to the sum).
+
+**Verify:** Assert that the first trading day in the evaluation range (START_DATE) maps to an index > 66 + 16 in the stock data array. If this assumption fails, the rolling sum guard (`min_periods=16`) produces NaN, and `get_s9_condition()` returns False, which is a safe fallback.
+
+#### 6.6 Energy Parity Test
+
+**Required:** Build a validation sub-test that compares pre-computed energy values against the original `calculate_energy_indicators_last_16_days()` for a set of representative sell-days.
+
+```python
+# For each sell-day (position_status == "I"):
+original = calculate_energy_indicators_last_16_days(tradeday_str, filtered_code, filtered_spy)
+precomp = precomputed.get_energy_data(code_end_idx)
+
+# Compare:
+assert original["E1"] == precomp["E1"], f"E1 mismatch at {tradeday_str}"
+assert original["E2"] == precomp["E2"], f"E2 mismatch at {tradeday_str}"
+assert original["E3"] == precomp["E3"], f"E3 mismatch at {tradeday_str}"
+assert original["E4"] == precomp["E4"], f"E4 mismatch at {tradeday_str}"
+assert original["E5"] == precomp["E5"], f"E5 mismatch at {tradeday_str}"
+assert abs(original["energy_score"] - precomp["energy_score"]) < 1e-10, \
+    f"energy_score mismatch at {tradeday_str}"
+```
+
+This test runs **alongside** the original path (not replacing it) to validate parity before switching. If E2 shows discrepancies due to RSI convergence, investigate and potentially implement the 24-month-windowed RSI fallback.
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `app/workers/algo_func/precomputed_indicators.py` | Add E1–E5 arrays, energy_score, get_energy_data(), get_s9_condition() |
+| `tests/` | Energy parity sub-test |
+
+### Risks
+
+- **RSI convergence edge case:** If a stock has very few trading days before START_DATE (less than ~30 bars between data start and the 24-month-filtered start), RSI convergence may not hold. For stock 3888 with data from ~2001, this is not an issue (~500+ bars before 2016). For stocks with shorter history, the parity test will catch any discrepancy.
+- **E4 date alignment:** The original uses linear search (`sdate_spy.index(sdate[idx])`) while pre-computed uses bisect. For dates that exist in both series (normal case), results are identical. For missing dates, bisect maps to the previous date while the original would raise `ValueError` and return `E4 = "0"`. The pre-computed version should handle this correctly via the NaN guard.
+- **Energy score precision:** The rolling sum uses float64 arithmetic. Cumulative floating-point rounding over 16 additions may produce differences at the ~1e-15 level. The sell threshold (`< 0.22`) has more than enough margin for this to be safe.
+
+---
+
+## Phase 7 — Integrate Pre-Computed Sell Path into Algorithm Worker
+
+### Goal
+
+Replace the sell-side call chain in `signals_for_the_period()` with the pre-computed methods from Phases 5 and 6. This is the integration phase that activates the pre-computed sell path in the main loop.
+
+**Expected speedup:** This phase does not add new computation — it activates the arrays pre-computed in Phases 5–6. The full speedup from Phases 5+6+7 combined is ~7–10× on the sell path, bringing total pipeline time to ~15–25s per genome.
+
+### Background
+
+After Phases 5 and 6, `PrecomputedIndicators` contains all the sell-side arrays and fast methods. This phase wires them into the main loop, replacing:
+- `calculate_energy_indicators_last_16_days()` with `precomputed.get_energy_data(code_end_idx)`
+- `runAllSellConditions()` with `precomputed.run_all_sell_conditions_fast(code_end_idx, buy_idx, buy_price, stop_loss)`
+- `filtered_code` / `filtered_spy` slicing with direct `code_end_idx` usage
+
+### Tasks
+
+#### 7.1 Update Sell Branch in `signals_for_the_period()`
+
+**Current code** (algorithm_worker.py, sell branch):
+```python
+elif position_status == "I":
+    # Energy needed for sell evaluation (S9)
+    energy_data = calculate_energy_indicators_last_16_days(
+        tradeday_str, filtered_code, filtered_spy
+    )
+
+    entry_date = latest_signal.get("entry_date")
+    entry_price = latest_signal.get("entry_price")
+
+    if latest_signal["next_open_action"] == "B":
+        entry_date = tradeday_str
+        entry_price = bar.open
+
+    exit1 = to_float_or_none(latest_signal.get("exit1"))
+    sellSignals = runAllSellConditions(
+        filtered_code, filtered_spy, entry_date,
+        to_float_or_none(entry_price), exit1, tradeday_str, params,
+        energy_data=energy_data,
+    )
+    sell = isSell(sellSignals['conditions'])
+    new_stop_loss = sellSignals['stop_loss']
+```
+
+**New code:**
+```python
+elif position_status == "I":
+    entry_date = latest_signal.get("entry_date")
+    entry_price = latest_signal.get("entry_price")
+
+    if latest_signal["next_open_action"] == "B":
+        entry_date = tradeday_str
+        entry_price = bar.open
+
+    # O(1) buy-index lookup via pre-computed date map
+    buy_idx = precomputed.date_to_idx.get(entry_date, -1)
+    exit1 = to_float_or_none(latest_signal.get("exit1"))
+
+    # Pre-computed sell evaluation — replaces runAllSellConditions + energy
+    sellSignals = precomputed.run_all_sell_conditions_fast(
+        code_end_idx, buy_idx, to_float_or_none(entry_price), exit1
+    )
+    sell = isSell(sellSignals['conditions'])
+    new_stop_loss = sellSignals['stop_loss']
+
+    # Pre-computed energy data for CSV output
+    energy_data = precomputed.get_energy_data(code_end_idx)
+```
+
+**Key changes:**
+1. `calculate_energy_indicators_last_16_days()` call removed entirely.
+2. `runAllSellConditions()` replaced with `precomputed.run_all_sell_conditions_fast()`.
+3. `buy_idx` obtained via O(1) dict lookup instead of O(n) linear scan.
+4. `filtered_code` / `filtered_spy` slicing no longer needed in the sell branch.
+
+#### 7.2 Remove Unnecessary List Slicing
+
+After this phase, neither the buy branch (Phase 1) nor the sell branch (Phase 7) use `filtered_code` or `filtered_spy`. The list slicing can be removed from the main loop:
+
+```python
+# REMOVE these lines:
+filtered_spy = spy_data[:spy_end_idx + 1] if spy_end_idx >= 0 else []
+filtered_code = code_data[:code_end_idx + 1] if code_end_idx >= 0 else []
+```
+
+Replace uses of `filtered_code[-1].close` with `code_data[code_end_idx].close` (direct index access, O(1)).
+
+**Note:** Keep `spy_end_idx` and `code_end_idx` computation — they are used by pre-computed method calls.
+
+#### 7.3 Backward Compatibility
+
+Keep `sell_signals.py` and `get_code_energy.py` untouched. The original sell functions remain available as reference implementation and fallback. The import of `runAllSellConditions` and `isSell` in `algorithm_worker.py` can remain — `isSell()` is still used to evaluate the conditions dict from the fast path.
+
+The `calculate_energy_indicators_last_16_days` import can be guarded or removed from the main loop, but should remain importable for tests.
+
+#### 7.4 Full Pipeline Validation
+
+**Required:** Run the existing sell parity test:
+
+```bash
+docker cp tests/test_sell_parity.py hk-algo-improve-algorithm-worker-1:/app/tests/
+docker cp tests/test_data/reference/final_trades_reference.csv \
+    hk-algo-improve-algorithm-worker-1:/app/tests/test_data/reference/
+docker-compose exec algorithm-worker python tests/test_sell_parity.py
+```
+
+**Gate:** Must print `PASS` with all 10 trade rows identical to reference. Pipeline time should be ~15–25s (vs 133.6s before Phases 5–7).
+
+**Performance benchmark:** Record `signals_for_the_period()` wall time. Expected breakdown:
+- `precompute_indicators` (compute_all): ~1–2s (one-time, includes both buy and sell arrays)
+- `main_signal_loop`: ~10–20s (all lookups are O(1), only CSV formatting and loop overhead remain)
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `app/workers/algorithm_worker.py` | Replace sell branch with pre-computed path, remove list slicing |
+
+### Risks
+
+- **buy_idx not found:** If `entry_date` is not in `precomputed.date_to_idx`, `buy_idx` will be -1. All sell condition methods must handle `buy_idx == -1` by returning `False` (matching original behavior where buy_idx not found causes the function to return `False`).
+- **Stop-loss chain:** S5's trailing stop-loss is stateful across days. `get_s5_condition()` receives `stop_loss` from the previous day's `latest_signal["exit1"]` and returns the updated value. This chain must be preserved exactly — the pre-computed ATR lookup replaces only the `atr(ohlcv, 20)[-1]` call, not the stop-loss accumulation logic.
+- **Import order:** `precomputed.run_all_sell_conditions_fast()` must be called AFTER the buy branch updates `latest_signal` (which sets `entry_date` and `entry_price` on the buy day). The current code structure already ensures this (sell branch is `elif position_status == "I"`).
+
+---
+
 
 ## Validation Strategy (All Phases)
 
@@ -598,15 +1198,19 @@ After each phase:
 | 1 | All buy signals identical to reference | ≥1.5× speedup on total genome time |
 | 2 | All sell decisions (`isSell()`) identical to reference | ≥1.2× additional speedup |
 | 3 | Final trade CSV identical to reference | Measurable speedup (profile-confirmed) |
-| 4 | Final trade CSV identical to reference | Near-linear scaling with CPU cores |
+| 5 | All sell condition values identical for evaluated conditions | ≥2× speedup on sell-day cost |
+| 6 | E1–E5 and energy_score match original for all sell-days | Energy computation eliminated from hot path |
+| 7 | Final trade CSV identical to reference (10 rows) | Total pipeline ≤30s (from ~133s) |
 
 ---
 
 ## Estimated Impact
 
-| Metric | Current | After All Phases |
-|--------|---------|-----------------|
-| Per-genome time | ~312s | ~15–30s |
-| 37 genomes (8 cores) | 194 min | ~10–20 min |
-| Bottleneck | O(n²) indicator recalculation | O(n) precomputed + constant lookups |
-| CPU utilization | ~12.5% effective (GIL) | ~100% per core |
+| Metric | Current | After Phases 1–3 | After Phases 5–7 |
+|--------|---------|-------------------|-------------------|
+| Per-genome time | ~312s | ~133s | ~15–25s |
+| 37 genomes (8 cores) | 194 min | ~82 min | ~10–15 min |
+| Buy-day bottleneck | O(n²) recalculation | O(1) pre-computed lookup | O(1) pre-computed lookup |
+| Sell-day bottleneck | O(n) per-call ATR/energy | O(n) per-call ATR/energy | O(1) pre-computed lookup |
+| Energy computation | O(n) × 16 per sell-day | Skipped on buy days | O(1) array lookup |
+| CPU utilization | ~12.5% effective (GIL) | ~100% per core | ~100% per core |

@@ -129,6 +129,44 @@ class PrecomputedIndicators:
         self.rolling_min_250: Optional[np.ndarray] = None
         self.rolling_max_250: Optional[np.ndarray] = None
         
+        # === Sell-side ATR arrays (Wilder's smoothing) ===
+        self.atr_s7: Optional[np.ndarray] = None    # S7, S16
+        self.atr_10: Optional[np.ndarray] = None     # S10
+        self.atr_100: Optional[np.ndarray] = None    # S10
+
+        # === S8: SMA-based ATR (different algorithm from Wilder's) ===
+        self.sma_tr_22: Optional[np.ndarray] = None
+        self.sma_tr_100: Optional[np.ndarray] = None
+        self.rolling_max_sma_tr_22: Optional[np.ndarray] = None
+
+        # === Rolling windows for sell conditions ===
+        self.rolling_max_high_90: Optional[np.ndarray] = None   # S6, S10
+        self.rolling_max_high_150: Optional[np.ndarray] = None  # S17
+        self.rolling_min_low_150: Optional[np.ndarray] = None   # S17
+        self.rolling_min_close_80: Optional[np.ndarray] = None  # S13
+        self.rolling_max_high_5: Optional[np.ndarray] = None    # E5
+        self.rolling_min_low_5: Optional[np.ndarray] = None     # E5
+
+        # === S6: days since most recent high in window ===
+        self.days_since_high_90: Optional[np.ndarray] = None
+
+        # === Fibonacci ratio for S11/S12 ===
+        self.fibo_ratio_250: Optional[np.ndarray] = None
+        self.fibo_above_382: Optional[np.ndarray] = None
+        self.fibo_above_236: Optional[np.ndarray] = None
+        self.fibo_consec_s11: Optional[np.ndarray] = None
+        self.fibo_consec_s12: Optional[np.ndarray] = None
+
+        # === S14 relative performance at multiple horizons ===
+        self.s14_stock_ratios: Dict[int, np.ndarray] = {}
+        self.s14_index_ratios: Dict[int, np.ndarray] = {}
+
+        # === S4 SMA (may differ from sma_150) ===
+        self.sma_s4: Optional[np.ndarray] = None
+
+        # === Date-to-index map for O(1) buy-date lookup ===
+        self.date_to_idx: Dict[str, int] = {}
+
         self._computed = False
     
     def compute_all(self) -> None:
@@ -218,8 +256,9 @@ class PrecomputedIndicators:
         s1_atr_period = getattr(p, 'input_S1_atr_period', 22)
         self.atr_s1 = self._atr_full(self.highs, self.lows, self.closes, s1_atr_period)
         
-        # === S5 ATR ===
-        self.atr_s5 = self._atr_full(self.highs, self.lows, self.closes, 22)
+        # === S5 ATR (Wilder's smoothing) ===
+        s5_atr_period = getattr(p, 'input_S5_atr_period', 20)
+        self.atr_s5 = self._atr_full(self.highs, self.lows, self.closes, s5_atr_period)
         
         # === RSI and StochRSI for energy ===
         self.rsi_10 = self._rsi_full(self.closes, 10)
@@ -230,6 +269,69 @@ class PrecomputedIndicators:
         self.rolling_min_250 = self._rolling_min(self.lows, 250)
         self.rolling_max_250 = self._rolling_max(self.highs, 250)
         
+        # === Sell-side ATR arrays (Wilder's smoothing) ===
+        s7_atr_period = getattr(p, 'input_S7_atr_period', 22)
+        self.atr_s7 = self._atr_full(self.highs, self.lows, self.closes, s7_atr_period)
+        self.atr_10 = self._atr_full(self.highs, self.lows, self.closes, 10)
+        self.atr_100 = self._atr_full(self.highs, self.lows, self.closes, 100)
+
+        # === S8: SMA-based ATR (different algorithm from Wilder's) ===
+        self.sma_tr_22 = self._sma_tr_full(22)
+        self.sma_tr_100 = self._sma_tr_full(100)
+        s8_window = getattr(p, 'input_S8_atr22_window', 126)
+        self.rolling_max_sma_tr_22 = self._rolling_max(self.sma_tr_22, s8_window)
+
+        # === Rolling windows for sell conditions ===
+        s6_window = getattr(p, 'input_S6_high_window', 90)
+        s17_window = getattr(p, 'input_S17_min_days', 150)
+        s13_lookback = getattr(p, 'input_S13_lookback', 80)
+
+        self.rolling_max_high_90 = self._rolling_max(self.highs, s6_window)
+        self.rolling_max_high_150 = self._rolling_max(self.highs, s17_window)
+        self.rolling_min_low_150 = self._rolling_min(self.lows, s17_window)
+        self.rolling_min_close_80 = self._rolling_min(self.closes, s13_lookback)
+        self.rolling_max_high_5 = self._rolling_max(self.highs, 5)
+        self.rolling_min_low_5 = self._rolling_min(self.lows, 5)
+
+        # === S6: days since most recent high in window ===
+        self.days_since_high_90 = self._rolling_days_since_max(self.highs, s6_window)
+
+        # === Fibonacci ratio for S11/S12 ===
+        with np.errstate(divide='ignore', invalid='ignore'):
+            range_250 = self.rolling_max_250 - self.rolling_min_250
+            self.fibo_ratio_250 = np.where(
+                range_250 > 0,
+                (self.rolling_max_250 - self.closes) / range_250,
+                np.nan
+            )
+
+        s11_level = getattr(p, 'input_S11_fib_level', 0.382)
+        s12_level = getattr(p, 'input_S12_fib_level', 0.236)
+        s11_yy = getattr(p, 'input_S11_yy_days', 2)
+        s12_yy = getattr(p, 'input_S12_yy_days', 22)
+
+        self.fibo_above_382 = ~np.isnan(self.fibo_ratio_250) & (self.fibo_ratio_250 > s11_level)
+        self.fibo_above_236 = ~np.isnan(self.fibo_ratio_250) & (self.fibo_ratio_250 > s12_level)
+        self.fibo_consec_s11 = self._rolling_all_true(self.fibo_above_382, s11_yy)
+        self.fibo_consec_s12 = self._rolling_all_true(self.fibo_above_236, s12_yy)
+
+        # === S14 relative performance ===
+        s14_horizons = getattr(p, 'input_S14_horizons', [35, 70, 105])
+        for horizon in s14_horizons:
+            stock_r, idx_r = self._calc_period_ratios(self.closes, self.spy_closes, horizon)
+            self.s14_stock_ratios[horizon] = stock_r
+            self.s14_index_ratios[horizon] = idx_r
+
+        # === S4 SMA (reuse sma_150 if period matches) ===
+        s4_sma_period = getattr(p, 'input_S4_sma_period', 150)
+        if s4_sma_period == 150:
+            self.sma_s4 = self.sma_150
+        else:
+            self.sma_s4 = self._sma_full(self.closes, s4_sma_period)
+
+        # === Date-to-index map for O(1) buy-date lookup ===
+        self.date_to_idx = {d: i for i, d in enumerate(self.dates)}
+
         self._computed = True
         logger.info("Indicators pre-computed successfully")
     
@@ -354,6 +456,77 @@ class PrecomputedIndicators:
         for i in range(period + 1, n):
             result[i] = (result[i-1] * (period - 1) + tr[i]) / period
         
+        return result
+
+    def _sma_tr_full(self, period: int) -> np.ndarray:
+        """Calculate SMA-based ATR (simple moving average of True Range).
+        
+        Matches sell_signals.py's sma(calc_tr_series(data), period).
+        DIFFERENT from Wilder's smoothing used in _atr_full().
+        
+        calc_tr_series() produces n-1 TR values (no TR for the first bar).
+        sma(trs, period) returns len(trs) - period + 1 values starting from trs[period-1].
+        First valid SMA corresponds to OHLCV index (period).
+        """
+        n = len(self.closes)
+        result = np.full(n, np.nan)
+        
+        if n < period + 1:
+            return result
+        
+        # True Range series (n-1 elements, offset by 1 from price array)
+        prev_close = np.roll(self.closes, 1)
+        prev_close[0] = self.closes[0]
+        
+        tr1 = self.highs[1:] - self.lows[1:]
+        tr2 = np.abs(self.highs[1:] - prev_close[1:])
+        tr3 = np.abs(self.lows[1:] - prev_close[1:])
+        tr = np.maximum(tr1, np.maximum(tr2, tr3))
+        
+        # SMA of TR using pandas rolling
+        sma_vals = pd.Series(tr).rolling(period, min_periods=period).mean().values
+        
+        # Align: TR[i] corresponds to OHLCV[i+1], so SMA_TR[j] → result[j+1]
+        for i in range(len(sma_vals)):
+            if not np.isnan(sma_vals[i]):
+                result[i + 1] = sma_vals[i]
+        
+        return result
+
+    def _rolling_days_since_max(self, values: np.ndarray, period: int) -> np.ndarray:
+        """For each index i, compute i - j where j is the latest index in
+        [i - period + 1, i] at which values[j] == max(values[i-period+1:i+1]).
+        
+        Used by S6 to find days since the most recent high in the window.
+        """
+        n = len(values)
+        result = np.full(n, np.nan)
+        for i in range(period - 1, n):
+            window_start = i - period + 1
+            max_val = values[window_start]
+            max_idx = window_start
+            for j in range(window_start + 1, i + 1):
+                if values[j] >= max_val:
+                    max_val = values[j]
+                    max_idx = j
+            result[i] = i - max_idx
+        return result
+
+    def _rolling_all_true(self, bools: np.ndarray, window: int) -> np.ndarray:
+        """True at index i if bools[i-window+1 : i+1] are all True (or == 1).
+        
+        Efficiently counts consecutive True values using a running counter.
+        """
+        n = len(bools)
+        result = np.full(n, False)
+        count = 0
+        for i in range(n):
+            if bools[i]:
+                count += 1
+            else:
+                count = 0
+            if count >= window:
+                result[i] = True
         return result
     
     def _rolling_percentile(

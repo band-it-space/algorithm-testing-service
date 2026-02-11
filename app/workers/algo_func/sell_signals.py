@@ -292,7 +292,6 @@ def s6(ohlcv, buy_date, trade_date, params: AlgorithmParameters = None):
     data = ohlcv
 
     if len(data) < high_window + 10:
-        logger.info(f"S6: not enough data ({len(data)} rows). Exit=False")
         return False
 
     last_idx = len(data) - 1
@@ -312,16 +311,13 @@ def s6(ohlcv, buy_date, trade_date, params: AlgorithmParameters = None):
                 break
 
     if buy_idx == -1:
-        logger.warning(f"S6: buy_date {buy_date} not found. Exit=False")
         return False
 
     days_since_buy = last_idx - buy_idx
     if days_since_buy < min_days:
-        logger.info("S6: days_since_buy < min_days, condition not active. Exit=False")
         return False
 
     if last_idx < high_window - 1:
-        logger.info(f"S6: not enough history for {high_window}D high. Exit=False")
         return False
 
     highs = [num(d.high, "high") for d in data]
@@ -337,9 +333,6 @@ def s6(ohlcv, buy_date, trade_date, params: AlgorithmParameters = None):
     days_since_high = last_idx - last_high_idx
 
     if days_since_high >= days_threshold:
-        logger.info(
-            f"S6: no {high_window}D high in the last {days_threshold} days. Exit=True",
-        )
         return True
 
     return False
@@ -731,6 +724,8 @@ def runAllSellConditions(ohlcv, spy_data, buy_date, buy_price, stop_loss, trade_
     if params is None:
         params = AlgorithmParameters()
 
+    logger.info(f"Sell - {trade_date}")
+    
     # Safety: verify data is sorted (O(1) check)
     if len(ohlcv) >= 2:
         assert ohlcv[0].date <= ohlcv[-1].date, \
