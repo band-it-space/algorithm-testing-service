@@ -358,7 +358,7 @@ def calculate_energy_indicators_single_day(stockname: str, trade_day: str, stock
         Dictionary with E1-E5 indicators for the specified date
     """
     # Call the 16-day function and return only the last day
-    result = calculate_energy_indicators_last_16_days(stockname, trade_day, stock_data, stock_data_2800)
+    result = calculate_energy_indicators_last_16_days(trade_day, stock_data, stock_data_2800)
     
     if result["status"] == "success" and result["indicators"]:
         # Return only the last day (target date)

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 API_KEY = os.getenv('API_KEY')
 
 START_DATE = "2009-03-06"
-END_DATE = "2019-03-06"
+END_DATE = "2026-01-01"
 
 
 async def process_algorithm_task(task_data):

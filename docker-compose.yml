@@ -43,6 +43,29 @@ services:
       retries: 3
       start_period: 40s
 
+  king-worker:
+    build: .
+    command: python workers/start_king_worker.py
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - KING_WORKER_TIMEOUT=1000
+      - KING_WORKER_MAX_RETRIES=${KING_WORKER_MAX_RETRIES:-3}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_DIR=/app/logs
+      - LOG_JSON=${LOG_JSON:-false}
+    volumes:
+      - ./app:/app/app
+      - ./workers:/app/workers
+      - ./logs:/app/logs
+      - ./data:/app/data
+    depends_on:
+      - redis
+    restart: unless-stopped
+
   algorithm-worker:
     build: .
     command: python workers/start_algorithm_worker.py

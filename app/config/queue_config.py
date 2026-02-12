@@ -22,6 +22,8 @@ else:
 # Queue configuration
 ALGORITHM_WORKER_TIMEOUT = int(os.getenv('ALGORITHM_WORKER_TIMEOUT', 1000))
 
+us_king_calculation_queue = Queue('us_king_calculation', connection=redis_conn, default_timeout=ALGORITHM_WORKER_TIMEOUT)
+
 algorithm_calculation_queue = Queue('algorithm_calculation', connection=redis_conn, default_timeout=ALGORITHM_WORKER_TIMEOUT)
 
 result_processing_queue = Queue('result_processing', connection=redis_conn)
