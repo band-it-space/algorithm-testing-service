@@ -1,10 +1,12 @@
 import numpy as np
 from datetime import datetime
-from app.workers.algo_func.get_code_energy import calculate_energy_indicators_last_16_days
 import pandas as pd
 from dataclasses import dataclass
 from typing import List, Optional
 import logging
+
+from app.workers.algo_func.get_code_energy import calculate_energy_indicators_last_16_days
+from app.workers.algo_func.helpers import to_ts, sma, atr
 
 logger = logging.getLogger(__name__)
 
@@ -34,38 +36,6 @@ def sma(values, period):
     for i in range(period - 1, len(values)):
         result.append(sum(values[i - period + 1 : i + 1]) / period)
     return result
-
-def atr(ohlcv: List[OHLCV], period: int):
-    if len(ohlcv) < period + 1:
-        return []  
-    trs = []
-    
-    for i in range(1, len(ohlcv)):
-        high = ohlcv[i].high
-        low = ohlcv[i].low
-        prev_close = ohlcv[i - 1].close
-        
-        if i == 0:
-            tr = high - low
-        else:
-            prev_close = ohlcv[i - 1].close
-            tr = max(
-                high - low,
-                abs(high - prev_close),
-                abs(low - prev_close),
-            )
-        trs.append(tr)
-
-    atr_values = []
-
-    first_atr = sum(trs[:period]) / period
-    atr_values.append(first_atr)
-
-    for i in range(period, len(trs)):
-        atr = (atr_values[-1] * (period - 1) + trs[i]) / period
-        atr_values.append(atr)
-
-    return atr_values
 
 def exit_by_stop_loss(ohlcv, stop_loss):
     if not isinstance(ohlcv, list) or len(ohlcv) == 0:
@@ -177,9 +147,9 @@ def fibo_exit_stop(
     ohlcv,
     buy_date,
     *,
-    xx_days: int,   # після скількох днів після входу сигнал стає активним (input_XX)
-    level: float,   # Fibo-рівень у виразі (H - C)/(H - L) > level (0.382, 0.236, ...)
-    yy_days: int    # скільки ОСТАННІХ днів умова має бути True (input_YY)
+    xx_days: int,
+    level: float,
+    yy_days: int
 ) -> bool:
     """
     Універсальна Fibo-умова виходу за аналогією з MultiCharts:
@@ -324,19 +294,6 @@ def s6(ohlcv, buy_date, trade_date):
 
     return False
 
-# def calc_atr22_series(ohlcv):
-#     n = len(ohlcv)
-#     trs = []
-#     for i in range(1, n):
-#         high = num(ohlcv[i].high, "high")
-#         low = num(ohlcv[i].low, "low")
-#         prev_close = num(ohlcv[i - 1].close, "prevClose")
-#         tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-#         trs.append(tr)
-
-#     atr_vals = sma(trs, 22)
-#     return atr_vals
-
 def s7(ohlcv, buy_date, buy_price):
     data = sorted(ohlcv, key=lambda x: to_ts(x.date))
     n = len(data)
@@ -410,14 +367,13 @@ def s10(ohlcv, buy_date, buy_price):
     n = len(data)
 
     if n < 101:
-        raise ValueError(
-            "Insufficient history: need at least 101 days for ATR(100) and 90D High."
-        )
+        return False
+    
     atr10_series = atr(data, 10)
     atr100_series = atr(data, 100)
 
     if len(atr10_series) < 1 or len(atr100_series) < 1:
-        raise ValueError("Failed to calculate ATR(10) or ATR(100) - insufficient data.")
+        return False
 
     atr10 = num(atr10_series[-1], "ATR(10)")
     atr100 = num(atr100_series[-1], "ATR(100)")
@@ -425,7 +381,7 @@ def s10(ohlcv, buy_date, buy_price):
     last90 = data[-91:-1]
     high90 = max(num(d.high, "high") for d in last90)
     if not np.isfinite(high90) or high90 <= 0:
-        raise ValueError("Invalid 90D High value.")
+        return False
 
     last_close = num(data[n - 1].close, "close")
     drawdown_pct = ((high90 - last_close) / high90) * 100
@@ -435,145 +391,35 @@ def s10(ohlcv, buy_date, buy_price):
 
     return cond_vol and cond_dd
 
-# def s11(ohlcv, buy_date, buy_price):
-#     data = sorted(ohlcv, key=lambda x: to_ts(x.date))
-#     n = len(data)
-
-#     if n < 250:
-#         raise ValueError(
-#             "Insufficient history: need at least 250 days to build Fibo Top/Bottom."
-#         )
-
-#     bts = to_ts(buy_date)
-#     buy_idx = -1
-#     for i, d in enumerate(data):
-#         if to_ts(d.date) == bts:
-#             buy_idx = i
-#             break
-#     if buy_idx == -1:
-#         for i, d in enumerate(data):
-#             if to_ts(d.date) > bts:
-#                 buy_idx = i
-#                 break
-#     if buy_idx == -1:
-#         raise ValueError("Buy date is outside data range.")
-
-#     last_idx = n - 1
-#     days_since_buy = last_idx - buy_idx
-
-#     if days_since_buy < 300:
-#         return False
-
-#     window250 = data[-250:]
-#     top = max(num(d.high, "high") for d in window250)
-#     bottom = min(num(d.low, "low") for d in window250)
-#     if not np.isfinite(top) or not np.isfinite(bottom) or top <= bottom:
-#         raise ValueError("Invalid 250D High/Low range for Fibo.")
-
-#     level0382 = bottom + 0.382 * (top - bottom)
-
-#     streak_below = 0
-#     for i in range(last_idx, -1, -1):
-#         c = num(data[i].close, "close")
-#         if c < level0382:
-#             streak_below += 1
-#         else:
-#             break
-
-#     return streak_below >= 3
-# def s11_multicharts_like(ohlcv, buy_date, buy_price,
-#                          xx_days=300,   
-#                          yy_days=2):    
-#     """
-#     S11: EFFECTIVE after xx_days.
-#     Use 250D High Low to define Fibo.
-#     If stay below 0.382 (від вершини) протягом yy_days поспіль -> EXIT.
-#     """
-
-#     data = sorted(ohlcv, key=lambda x: to_ts(x.date))
-#     n = len(data)
-
-#     if n < 250:
-#         return False
-
-#     bts = to_ts(buy_date)
-#     buy_idx = -1
-#     for i, d in enumerate(data):
-#         if to_ts(d.date) == bts:
-#             buy_idx = i
-#             break
-#     if buy_idx == -1:
-#         for i, d in enumerate(data):
-#             if to_ts(d.date) > bts:
-#                 buy_idx = i
-#                 break
-#     if buy_idx == -1:
-#         return False
-
-#     last_idx = n - 1
-#     bars_since_entry = last_idx - buy_idx
-
-#     # MultiCharts: barssinceentry(0) > XX
-#     if bars_since_entry <= xx_days:
-#         return False
-
-#     # Функція перевірки "нижче 0.382 від вершини" для конкретного бара i
-#     def below_0382_from_top(i: int) -> bool:
-#         # Потрібно мінімум 250 барів до i включно
-#         if i < 249:
-#             return False
-
-#         window = data[i - 249 : i + 1]  # останні 250 барів до дня i
-#         highs = [num(d.high, "high") for d in window]
-#         lows  = [num(d.low,  "low")  for d in window]
-
-#         high250 = max(highs)
-#         low250  = min(lows)
-#         if (not np.isfinite(high250) or
-#             not np.isfinite(low250) or
-#             high250 <= low250):
-#             return False
-
-#         close_i = num(data[i].close, "close")
-#         if not np.isfinite(close_i):
-#             return False
-
-#         ratio = (high250 - close_i) / (high250 - low250)
-#         return ratio > 0.382  # як у MultiCharts
-
-#     # Аналог countif(cond, yy_days) = yy_days для останніх yy_days барів
-#     true_count = 0
-#     for offset in range(yy_days):
-#         i = last_idx - offset
-#         if i < 0:
-#             return False
-#         if below_0382_from_top(i):
-#             true_count += 1
-
-#     return true_count == yy_days
 
 def s11(ohlcv, buy_date, buy_price):
     # S11. EFFECTIVE after {300} Days
     # level = 0.382, YY ≈ 2
-    return fibo_exit_stop(
-        ohlcv,
-        buy_date,
-        xx_days=300,
-        level=0.382,
-        yy_days=2,
-    )
+    try:
+        return fibo_exit_stop(
+            ohlcv,
+            buy_date,
+            xx_days=300,
+            level=0.382,
+            yy_days=2,
+        )
+    except (ValueError, Exception):
+        return False
 
 
 def s12(ohlcv, buy_date, buy_price):
     # S12. EFFECTIVE after {240} Days
     # level = 0.236, YY ≈ 22
-    return fibo_exit_stop(
-        ohlcv,
-        buy_date,
-        xx_days=240,
-        level=0.236,
-        yy_days=22,
-    )
+    try:
+        return fibo_exit_stop(
+            ohlcv,
+            buy_date,
+            xx_days=240,
+            level=0.236,
+            yy_days=22,
+        )
+    except (ValueError, Exception):
+        return False
 # def s12(ohlcv, buy_date, buy_price):
 #     data = sorted(ohlcv, key=lambda x: to_ts(x.date))
 #     n = len(data)
@@ -707,20 +553,29 @@ def s14(ohlcv, hsi_ohlcv, buy_date, buy_price):
     return under_all
 
 def s15(ohlcv, buy_date, buy_price):
-    data = sorted(ohlcv, key=lambda x: to_ts(x.date))
-    n = len(data)
+    """
+    S15: Rapid decline exit - price drops > 25% in 4 days
+    
+    MC Code: (close[4] - close) / close[4] * 100 > 25
+    Equivalent: (close / close[4]) - 1 < -0.25
+    """
+    try:
+        data = sorted(ohlcv, key=lambda x: to_ts(x.date))
+        n = len(data)
 
-    if n < 5:
-        raise ValueError("Insufficient history: need at least 5 trading days for S15.")
+        if n < 5:
+            return False
 
-    last_idx = n - 1
-    last_close = num(data[last_idx].close, "close[last]")
-    base_close = num(data[last_idx - 4].close, "close[t-4]")
-    if base_close <= 0:
-        raise ValueError("Invalid base close[t-4] value.")
+        last_idx = n - 1
+        last_close = num(data[last_idx].close, "close[last]")
+        base_close = num(data[last_idx - 4].close, "close[t-4]")
+        if base_close <= 0:
+            return False
 
-    ret4d = (last_close / base_close) - 1
-    return ret4d < -0.25
+        ret4d = (last_close / base_close) - 1
+        return ret4d < -0.25
+    except (ValueError, Exception):
+        return False
 
 def s16(
     ohlcv,
@@ -783,47 +638,70 @@ def s16(
     return vol_spike and big_drop
 
 def s17(ohlcv, buy_date, buy_price):
-    data = sorted(ohlcv, key=lambda x: to_ts(x.date))
-    n = len(data)
+    """
+    S17: Wide range retracement exit (effective after 150 days)
+    
+    MC Code:
+        if barssinceentry(0) > input_S17_XX then
+            if (highest(high, XX) / lowest(low, XX) - 1) * 100 > input_S17_YY then
+                if (close / lowest(low, XX) - 1) * 100 < input_S17_YY / 2 then
+                    is_stop_S17 = true
+    
+    Logic:
+    1. Activation: days_since_entry > 150
+    2. Wide range: (150D_high / 150D_low - 1) > 0.6 (60%)
+    3. Near bottom: (close / 150D_low - 1) < 0.3 (30%)
+    
+    input_S17_XX = 150, input_S17_YY = 60
+    """
+    try:
+        data = sorted(ohlcv, key=lambda x: to_ts(x.date))
+        n = len(data)
 
-    if n < 150:
-        raise ValueError("Insufficient history: need at least 150 days for S17.")
+        if n < 150:
+            return False
 
-    bts = to_ts(buy_date)
-    buy_idx = -1
-    for i, d in enumerate(data):
-        if to_ts(d.date) == bts:
-            buy_idx = i
-            break
-    if buy_idx == -1:
+        bts = to_ts(buy_date)
+        buy_idx = -1
         for i, d in enumerate(data):
-            if to_ts(d.date) > bts:
+            if to_ts(d.date) == bts:
                 buy_idx = i
                 break
-    if buy_idx == -1:
-        raise ValueError("Buy date is outside data range.")
+        if buy_idx == -1:
+            for i, d in enumerate(data):
+                if to_ts(d.date) > bts:
+                    buy_idx = i
+                    break
+        if buy_idx == -1:
+            return False
 
-    last_idx = n - 1
-    days_since_buy = last_idx - buy_idx
+        last_idx = n - 1
+        days_since_buy = last_idx - buy_idx
 
-    if days_since_buy < 150:
+        # MC: barssinceentry(0) > 150 (activation AFTER 150 days)
+        if days_since_buy <= 150:
+            return False
+
+        window150 = data[-150:]
+        high150 = max(num(d.high, "high") for d in window150)
+        low150 = min(num(d.low, "low") for d in window150)
+        if not np.isfinite(high150) or not np.isfinite(low150) or high150 <= low150:
+            return False
+
+        # Condition 1: (high/low - 1) * 100 > 60  =>  high > 1.6 * low
+        wide_range = high150 > 1.6 * low150
+
+        if not wide_range:
+            return False
+
+        last_close = num(data[last_idx].close, "close")
+        
+        # Condition 2: (close/low - 1) * 100 < 30  =>  close < 1.3 * low
+        near_bottom = last_close < 1.3 * low150
+
+        return near_bottom
+    except (ValueError, Exception):
         return False
-
-    window150 = data[-150:]
-    high150 = max(num(d.high, "high") for d in window150)
-    low150 = min(num(d.low, "low") for d in window150)
-    if not np.isfinite(high150) or not np.isfinite(low150) or high150 <= low150:
-        raise ValueError("Invalid 150-day High/Low range.")
-
-    wide_range = high150 > 1.6 * low150
-
-    if not wide_range:
-        return False
-
-    last_close = num(data[last_idx].close, "close")
-    near_bottom = last_close < 1.3 * low150
-
-    return near_bottom
 
 
 def runAllSellConditions(ohlcv, spy_data, buy_date, buy_price, stop_loss, trade_date):
@@ -869,20 +747,6 @@ def isSell(signals):
         or signals["S17"]
     )
 
-
-def to_ts(date):
-    if isinstance(date, datetime):
-        return date.timestamp() * 1000
-    if isinstance(date, (int, float)):
-        return date
-    try:
-        if isinstance(date, str):
-            dt = datetime.fromisoformat(date.replace("Z", "+00:00"))
-        else:
-            dt = datetime.fromisoformat(str(date))
-        return dt.timestamp() * 1000
-    except (ValueError, TypeError):
-        raise ValueError(f"Invalid date: {date}")
 
 
 def num(value, name):

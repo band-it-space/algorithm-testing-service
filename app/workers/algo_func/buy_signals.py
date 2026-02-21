@@ -1,45 +1,14 @@
 import numpy as np
 from typing import List, Dict, Optional, Union
-from dataclasses import dataclass
 import logging
 from datetime import datetime
 
+from app.workers.algo_func.types import OHLCV
+from app.workers.algo_func.helpers import to_ts, sma, lewis_atr
+
 logger = logging.getLogger(__name__)
 
-@dataclass
-class OHLCV:
-    date: str
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: Optional[float] = None
-
-# Utility functions
-def to_ts(date):
-    if isinstance(date, datetime):
-        return date.timestamp() * 1000
-    if isinstance(date, (int, float)):
-        return date
-    try:
-        if isinstance(date, str):
-            dt = datetime.fromisoformat(date.replace("Z", "+00:00"))
-        else:
-            dt = datetime.fromisoformat(str(date))
-        return dt.timestamp() * 1000
-    except (ValueError, TypeError):
-        raise ValueError(f"Invalid date: {date}")
-
-def sma(values: List[float], period: int) -> List[float]:
-    if len(values) < period:
-        return []
-    
-    result = []
-    for i in range(period - 1, len(values)):
-        window = values[i - period + 1:i + 1]
-        result.append(sum(window) / period)
-    return result
-
+# Bollinger Bands and utility functions
 def bollinger_bands(values: List[float], period: int, std_dev: float) -> List[Dict[str, float]]:
     if len(values) < period:
         return []
@@ -252,7 +221,7 @@ def checkB8(ohlcv: List[OHLCV]) -> bool:
 
     recent46Low = min(lows[-46:])
 
-    pastRange = lows[-270:-47]
+    pastRange = lows[-270:-46]
     pastMinRange = min(pastRange)
 
     return recent46Low > pastMinRange
@@ -284,45 +253,64 @@ def checkB9(ohlcv: List[OHLCV]) -> bool:
     return not (condCloseBelowMid and condHighEarlierThanLow)
 
 #TODO B10 ++
-def checkB10(ohlcv: List[OHLCV]) -> bool:
-    if len(ohlcv) < 250:
+def checkB10(
+    ohlcv: List[OHLCV],
+    lookback_period: int = 250,
+    recent_period: int = 68
+) -> bool:
+    """
+    B10 - Cancel if recent 250D low happened too recently (within 68 days)
+    
+    IDENTICAL for both HK Algo and US King algorithms.
+    
+    Condition:
+    - Find the lowest low in the last {lookback_period} days
+    - If this low occurred within the last {recent_period} days → CANCEL buy
+    - If this low occurred MORE than {recent_period} days ago → OK
+    
+    Rationale: If the stock just made a new low recently, it's too risky to buy.
+    We want the low to be old enough (established base).
+    
+    Args:
+        ohlcv: Price data
+        lookback_period: Period to find the lowest low (default 250)
+        recent_period: Days to check if low is too recent (default 68)
+    
+    Returns:
+        True if buy signal is valid (low is old enough)
+        False if buy signal should be cancelled (low too recent)
+    
+    Documentation: "if 250D low happens within {68} days before breakout, cancel buy"
+    
+    MC Code Reference:
+    - if lowestbar(low, 250) < input_XXXD_low_day then cond15_XXXD_low = false
+    - input_XXXD_low_day = 68 for both HK and US King
+    - lowestbar returns index of lowest bar (0 = today, 1 = yesterday, etc.)
+    - If index < 68, low is within last 68 days → cancel
+    """
+    if len(ohlcv) < lookback_period:
         return False
 
-    last250 = ohlcv[-250:]
-    lows = [bar.low for bar in last250]
+    last_period = ohlcv[-lookback_period:]
+    lows = [bar.low for bar in last_period]
 
-    minLow = min(lows)
-    minIndex = lows.index(minLow)
-
-    return minLow not in lows[-68:]
-
-
-    # daysSinceLow = len(last250) - 1 - minIndex
-
-    # return daysSinceLow > 68
+    min_low = min(lows)
+    
+    # Check if min_low is NOT in the last recent_period days
+    # If it's not there, it's old enough → valid
+    result = min_low not in lows[-recent_period:]
+    
+    if not result:
+        # Find actual index for logging
+        min_index = len(lows) - 1 - max(i for i in range(len(lows)) if lows[i] == min_low)
+        # logger.info(
+        #     f"B10 - CANCEL: 250D low ({min_low:.2f}) occurred {min_index} days ago "
+        #     f"(within {recent_period} days)"
+        # )
+    
+    return result
 from typing import List
 
-def lewis_atr(highs: List[float], lows: List[float], closes: List[float], period: int) -> List[Optional[float]]:
-    n = len(highs)
-    if n < 2:
-        return [None] * n
-    atr_values: List[Optional[float]] = [None] * n
-    
-    prev_atr = 0.0
-    
-    for i in range(1, n):
-        tr = max(
-            highs[i] - lows[i],
-            abs(highs[i] - closes[i - 1]),
-            abs(lows[i] - closes[i - 1]),
-        )
-        
-        current_atr = (prev_atr * (period - 1) + tr) / period
-        
-        atr_values[i] = current_atr
-        prev_atr = current_atr
-
-    return atr_values
 
 def checkB11(ohlcv: List["OHLCV"]) -> bool:
     ohlcv = sorted(ohlcv, key=lambda x: to_ts(x.date))
@@ -356,24 +344,62 @@ def checkB12(
     ohlcv: List["OHLCV"],
     input_B12_growth: float = 0.16,
     input_B12_days: int = 50,
-    input_B12_deviation: float = 0.2
+    input_B12_deviation: float = 0.2,
+    input_B12_sma_period: int = 150
 ) -> bool:
-
-
+    """
+    B12 - Cancel buy if SMA grew too fast AND price deviated too much
+    
+    SIMILAR logic for both HK Algo and US King, but with different parameters.
+    
+    Two conditions (BOTH must be TRUE to CANCEL buy):
+    1. SMA({sma_period}) grew more than {growth}% in last {days} days
+    2. Today's HIGH is more than {deviation}% above SMA({sma_period})
+    
+    Logic: Avoid buying overheated stocks with rapid MA growth + excessive price extension
+    
+    Args:
+        ohlcv: Price data
+        input_B12_growth: MA growth threshold as decimal (default 0.16 = 16%)
+        input_B12_days: Days to check MA growth (default 50)
+        input_B12_deviation: High deviation threshold as decimal (default 0.2 = 20%)
+        input_B12_sma_period: SMA period for both calculations (default 150)
+    
+    Returns:
+        True if buy signal is valid (NOT overheated)
+        False if buy should be cancelled (overheated)
+    
+    HK Algo Parameters:
+        - growth: 16%, days: 50, deviation: 20%, sma_period: 150
+    
+    US King Parameters:
+        - growth: 16%, days: 50, deviation: 20%, sma_period: 150
+        (Note: SAME default values for both algorithms)
+    
+    MC Code Reference (US King):
+        if average(close,150)/average(close,150)[50]-1 > 16/100 
+           and high/average(close, 150)-1 > 20/100 then
+            cond18_B12 = false
+    
+    Example:
+        - 150MA today = $100, 150MA 50 days ago = $85
+        - MA Growth: 100/85-1 = 17.6% > 16% ✓
+        - Today's HIGH = $125
+        - Deviation: 125/100-1 = 25% > 20% ✓
+        - Result: CANCEL buy (too overheated)
+    """
     closes = [b.close for b in ohlcv]
     n = len(closes)
-    if n < 150 + input_B12_days:
+    if n < input_B12_sma_period + input_B12_days:
         return False
 
-    sma150 = sma(closes, 150)
-    warmup = 150 - 1
-    if not sma150 or len(sma150) != n - warmup:
+    sma_series = sma(closes, input_B12_sma_period)
+    warmup = input_B12_sma_period - 1
+    if not sma_series or len(sma_series) != n - warmup:
         return False
 
-
-
-    sma_now = sma150[-1]
-    sma_past = sma150[-51]
+    sma_now = sma_series[-1]
+    sma_past = sma_series[-(input_B12_days + 1)]
     if sma_now in (None, 0) or sma_past in (None, 0):
         return False
 
@@ -389,36 +415,106 @@ def checkB13(
     input_B13_XX: int = 19,
     input_B13_YY: int = 60
 ) -> bool:
+    """
+    B13 - Cancel buy if stock underperforms market index
+    
+    IDENTICAL logic for both HK Algo and US King, but with DIFFERENT parameters.
+    
+    Condition:
+    - Compare stock performance vs index over TWO periods
+    - CANCEL buy if stock underperforms index in BOTH periods
+    
+    Logic:
+    - Stock XX-day return = close[0] / close[XX]
+    - Index XX-day return = close[0] / close[XX]
+    - If stock_return_XX < index_return_XX AND stock_return_YY < index_return_YY → CANCEL
+    
+    Args:
+        ohlcvStock: Stock price data
+        ohlcvIndex: Index price data (HSI for HK, SPY for US)
+        input_B13_XX: Short period lookback (default 19)
+        input_B13_YY: Long period lookback (default 60 for HK)
+    
+    Returns:
+        True if buy signal is valid (stock performing OK vs index)
+        False if buy should be cancelled (underperforming in both periods)
+    
+    HK Algo Parameters:
+        - input_B13_XX = 19 days
+        - input_B13_YY = 60 days
+        - Index = HSI (data(2) in MC code)
+    
+    US King Parameters:
+        - input_B13_XX = 19 days
+        - input_B13_YY = 100 days (NOT 60!)
+        - Index = SPY (data(2) in MC code)
+    
+    HK Documentation: "CANCEL Buy if the stock is underperforming 2800 for {19}-Day AND {60}-Day"
+    US Documentation: "CANCEL buy if the stock is underperforming SPY for {19}-Day AND {100}-Day"
+    
+    MC Code Reference (same logic for both):
+        if close/close[input_B13_XX] < close data(2)/close[input_B13_XX] data(2) and
+           close/close[input_B13_YY] < close data(2)/close[input_B13_YY] data(2) then
+            cond19_B13 = false
+    
+    Usage:
+        # For HK Algo (default):
+        checkB13(stock_data, hsi_data)  # Uses 19 and 60
+        
+        # For US King:
+        checkB13(stock_data, spy_data, input_B13_XX=19, input_B13_YY=100)
+    """
     if not ohlcvStock or not ohlcvIndex:
         return False
     
     stock = sorted(ohlcvStock, key=lambda x: to_ts(x.date))
     index = sorted(ohlcvIndex, key=lambda x: to_ts(x.date))
 
-    max_period = max(input_B13_XX, input_B13_YY)
+    # Need current bar + lookback period
+    max_period = max(input_B13_XX, input_B13_YY) + 1  # +1 for lookback offset
 
     if len(stock) <= max_period or len(index) <= max_period:
         return False
 
+    # MultiCharts indexing: close[0] = current bar, close[N] = N bars back
+    # Python: stock[-1] = current bar (today)
     s_today = stock[-1].close
     i_today = index[-1].close
 
-    s_x_ago = stock[-input_B13_XX -1].close
-    i_x_ago = index[-input_B13_XX -1].close
+    # close[19] in MC = 19 bars back = stock[-(19+1)] = stock[-20]
+    s_x_ago = stock[-(input_B13_XX + 1)].close
+    i_x_ago = index[-(input_B13_XX + 1)].close
 
-    s_y_ago = stock[-input_B13_YY -1].close
-    i_y_ago = index[-input_B13_YY -1].close
+    # close[100] in MC = 100 bars back = stock[-(100+1)] = stock[-101]
+    s_y_ago = stock[-(input_B13_YY + 1)].close
+    i_y_ago = index[-(input_B13_YY + 1)].close
 
     stock_ratio_x = s_today / s_x_ago
     index_ratio_x = i_today / i_x_ago
 
     stock_ratio_y = s_today / s_y_ago
     index_ratio_y = i_today / i_y_ago
+    
+    # Check if stock underperforms index in BOTH periods
+    underperforms_x = stock_ratio_x < index_ratio_x
+    underperforms_y = stock_ratio_y < index_ratio_y
+    underperforms_both = underperforms_x and underperforms_y
+    
+    # Debug logging
+    logger.info(f"B13 DEBUG - Data length: Stock={len(stock)}, Index={len(index)}")
+    logger.info(f"B13 DEBUG - Stock dates: today={stock[-1].date}, {input_B13_XX}d_ago={stock[-(input_B13_XX+1)].date}, {input_B13_YY}d_ago={stock[-(input_B13_YY+1)].date}")
+    logger.info(f"B13 DEBUG - Index dates: today={index[-1].date}, {input_B13_XX}d_ago={index[-(input_B13_XX+1)].date}, {input_B13_YY}d_ago={index[-(input_B13_YY+1)].date}")
+    logger.info(f"B13 DEBUG - Stock prices: today={s_today:.2f}, {input_B13_XX}d_ago={s_x_ago:.2f}, {input_B13_YY}d_ago={s_y_ago:.2f}")
+    logger.info(f"B13 DEBUG - Index prices: today={i_today:.2f}, {input_B13_XX}d_ago={i_x_ago:.2f}, {input_B13_YY}d_ago={i_y_ago:.2f}")
+    
+    logger.info(f"B13 - Stock {input_B13_XX}-day: {stock_ratio_x:.4f} {'<' if underperforms_x else '>='} Index: {index_ratio_x:.4f} {'(underperforms)' if underperforms_x else '(OK)'}")
+    logger.info(f"B13 - Stock {input_B13_YY}-day: {stock_ratio_y:.4f} {'<' if underperforms_y else '>='} Index: {index_ratio_y:.4f} {'(underperforms)' if underperforms_y else '(OK)'}")
+    logger.info(f"B13 - Final result: {'FALSE - Cancel buy (underperforms both periods)' if underperforms_both else 'TRUE - Allow buy (performing OK)'}")
 
-    if (stock_ratio_x < index_ratio_x) and (stock_ratio_y < index_ratio_y):
-        return False
+    if underperforms_both:
+        return False  # Cancel buy - stock underperforming
     else: 
-        return True
+        return True  # Allow buy - stock performing OK
 
 #TODO B18
 def checkB18(ohlcv: List[OHLCV], targetDate: str) -> bool:

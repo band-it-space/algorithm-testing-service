@@ -1,6 +1,7 @@
 import pytest
 
-from app.workers.algo_func.buy_signals import OHLCV, checkB9
+from app.workers.algo_func.types import OHLCV
+from app.workers.algo_func.buy_signals import checkB9
 
 
 def _mk(day, o, h, l, c, v=1000):

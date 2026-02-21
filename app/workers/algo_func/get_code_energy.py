@@ -109,6 +109,145 @@ def calculate_rsi(prices: List[float], current_idx: int, period: int) -> List[fl
     
     return rsi_values
 
+def calculate_E1(high: List[float], low: List[float], close: List[float], idx: int) -> str:
+    """
+    E1: New high in the past 20D and close is higher than [Low + 0.65 * (High - Low)]
+    
+    MultiCharts equivalent:
+    E1 = iff(cond01a_NewHigh and cond01b_ClosevsHighLow, 1, 0)
+    where cond01a_NewHigh = high > highest(high, 20)[1]
+    and cond01b_ClosevsHighLow = close > (high - low) * 0.65 + low
+    """
+    if idx < 20:
+        return "N/A"
+    
+    # Calculate max high in the past 20 days (not including current bar)
+    start_idx = max(0, idx - 20)
+    end_idx = idx - 1  # not including current bar
+    
+    if end_idx >= start_idx:
+        max_high_20d = max(high[start_idx:end_idx + 1])
+    else:
+        max_high_20d = 0
+    
+    # Check E1 conditions
+    if (high[idx] > max_high_20d and 
+        close[idx] > (high[idx] - low[idx]) * 0.65 + low[idx]):
+        return "1"
+    return "0"
+
+
+def calculate_E2(close: List[float], idx: int) -> str:
+    """
+    E2: StochRSI(10) > 0.5
+    
+    MultiCharts equivalent:
+    E2 = iff(_lewis_StochRSI(10) > 0.5, 1, 0)
+    """
+    period_rsi = 10
+    period_stoch = 10
+    
+    if idx < (period_rsi + period_stoch - 1):
+        return "0"
+    
+    rsi_values = calculate_rsi(close, idx, period_rsi)
+    rsi_val = rsi_values[idx]
+    
+    start_pos = idx - (period_stoch - 1)
+    end_pos = idx + 1
+    
+    window = [v for v in rsi_values[start_pos:end_pos] if not (v != v)]
+    if len(window) == period_stoch:
+        max_val = max(window)
+        min_val = min(window)
+        if max_val == min_val:
+            stochrsi = 0.0
+        else:
+            stochrsi = (rsi_val - min_val) / (max_val - min_val)
+        return "1" if stochrsi > 0.5 else "0"
+    return "0"
+
+
+def calculate_E3(close: List[float], idx: int) -> str:
+    """
+    E3: SLOPE(Close, 66) > 0
+    
+    MultiCharts equivalent:
+    SLOPE = (close - close[66])/66
+    E3 = iff(cond06_SLOPE, 1, 0)
+    """
+    if idx < 66:
+        return "N/A"
+    
+    if (close[idx] - close[idx - 66]) / 66 > 0:
+        return "1"
+    return "0"
+
+
+def calculate_E4(close: List[float], close_spy: List[float], 
+                 sdate: List[str], sdate_spy: List[str], idx: int) -> str:
+    """
+    E4: Price change over 33 days outperforming SPY
+    
+    MultiCharts equivalent:
+    E4 = iff(close[33]=0, 0, iff(close/close[33] > close data(2)/close[33] data(2), 1, 0))
+    where data(2) is SPY
+    """
+    if idx < 33:
+        return "0"
+    
+    try:
+        arr_idx = sdate_spy.index(sdate[idx])
+        
+        # Check if we have enough data (33 days back) for both stock and SPY
+        if (arr_idx >= 33 and arr_idx < len(close_spy) and idx < len(close)):
+            stock_performance = close[idx] / close[idx - 33]
+            spy_performance = close_spy[arr_idx] / close_spy[arr_idx - 33]
+            
+            if stock_performance > spy_performance:
+                return "1"
+        return "0"
+    except ValueError:
+        return "0"
+
+
+def calculate_E5(high: List[float], low: List[float], close: List[float], idx: int) -> str:
+    """
+    E5: Latest price is at top half of 5-day range and current price > price of 5 days ago 
+    and current price is less than 7% drawdown from 250D high
+    
+    MultiCharts equivalent:
+    E5 = iff(highest(high, 5) - lowest(low, 5) = 0, 0, 
+        iff((close - lowest(low, 5))/(highest(high, 5) - lowest(low, 5)) > 0.5 
+            and close - close[5] > 0 
+            and (highest(high, 250) - close)/highest(high, 250) < 0.07, 1, 0))
+    """
+    if idx < 5:
+        return "0"
+    
+    # lowest(low, 5) - get min low of last 5 days including current
+    start_idx_5 = max(0, idx - 4)  # Last 5 days including current
+    min5 = min(low[start_idx_5:idx + 1])
+    
+    # highest(high, 5) - get max high of last 5 days including current
+    max5 = max(high[start_idx_5:idx + 1])
+    
+    # lowest(low, 250) - get min low of last 250 days including current
+    start_idx_250 = max(0, idx - 249)  # Last 250 days including current
+    
+    # highest(high, 250) - get max high of last 250 days including current
+    max250 = max(high[start_idx_250:idx + 1])
+    
+    # Check all three E5 conditions
+    condition1 = (close[idx] - min5) / (max5 - min5) > 0.5 if max5 != min5 else False
+    condition2 = close[idx] - close[idx - 5] > 0 if idx >= 5 else False
+    condition3 = (max250 - close[idx]) / max250 < 0.07 if max250 != 0 else False
+    
+    if condition1 and condition2 and condition3:
+        return "1"
+    return "0"
+
+
 def calculate_energy_indicators_last_16_days(trade_day: str, stock_data: List[StockRecord], stock_data_2800: List[StockRecord]) -> Dict[str, Any]:
     """
     Calculate E1-E5 energy indicators for the last 16 trading days including the current day
@@ -140,7 +279,6 @@ def calculate_energy_indicators_last_16_days(trade_day: str, stock_data: List[St
         sdate_spy = processed_data_spy['string_dates']
         
         # Find the last 16 trading days including the target date
-        target_dates = []
         target_indices = []
         
         # Find the index of the target date
@@ -159,7 +297,6 @@ def calculate_energy_indicators_last_16_days(trade_day: str, stock_data: List[St
         # Get the last 16 indices (including target date)
         start_idx = max(0, target_idx - 15)  # 15 days before + target date = 16 days
         for i in range(start_idx, target_idx + 1):
-            target_dates.append(ddate[i])
             target_indices.append(i)
         
         all_indicators = []
@@ -168,125 +305,15 @@ def calculate_energy_indicators_last_16_days(trade_day: str, stock_data: List[St
             # islatest - mark as latest if it's the target date (last in our 16-day range)
             is_latest = "1" if idx == target_idx else "0"
             
+            # Calculate energy indicators using separate functions
             if idx >= 66:  # with at least 66 bars for calculation
-                
-                #####################################
-                # E1. New high in the past {20D} and close is higher than [Low + {0.65} * (High - Low)]
-                # high > highest(high, 20)[1] and
-                # close > (high - low) * 0.65 + low
-                
-                # Calculate max high in the past 20 days (not including current bar)
-                start_idx = max(0, idx - 20)
-                end_idx = idx - 1  # not including current bar
-                
-                if end_idx >= start_idx:
-                    max_high_20d = max(high[start_idx:end_idx + 1])
-                else:
-                    max_high_20d = 0
-                
-                # Check E1 conditions
-                if (high[idx] > max_high_20d and 
-                    close[idx] > (high[idx] - low[idx]) * 0.65 + low[idx]):
-                    E1 = "1"
-                else:
-                    E1 = "0"
-                
-                #####################################
-                # E2. StochRSI(10) > 0.5
-                period_rsi = 10
-                period_stoch = 10
-                
-                if idx >= (period_rsi + period_stoch - 1):
-                    rsi_values = calculate_rsi(close, idx, period_rsi)
-                
-                    rsi_val = rsi_values[idx]
-                
-                    start_pos = idx - (period_stoch - 1)
-                    end_pos = idx + 1
-                
-                    window = [v for v in rsi_values[start_pos:end_pos] if not (v != v)]
-                    if len(window) == period_stoch:
-                        max_val = max(window)
-                        min_val = min(window)
-                        if max_val == min_val:
-                            stochrsi = 0.0
-                        else:
-                            stochrsi = (rsi_val - min_val) / (max_val - min_val)
-                        E2 = "1" if stochrsi > 0.5 else "0"
-                    else:
-                        E2 = "0"
-                else:
-                    E2 = "0"
-
-                #####################################
-                # E3. SLOPE(Close, {66}) > 0
-                # (close - close[66])/66
-                if (close[idx] - close[idx - 66]) / 66 > 0:
-                    E3 = "1"
-                else:
-                    E3 = "0"
-
-                #####################################
-                # E4. Price change over 33 days outperforming SPY
-                # close/close[33] > close data(2)/close[33] data(2)
-                
-                # Find matching date in SPY data
-                try:
-                    arr_idx = sdate_spy.index(sdate[idx])
-                    
-                    # Check if we have enough data (33 days back) for both stock and SPY
-                    if (idx >= 33 and arr_idx >= 33 and 
-                        arr_idx < len(close_spy) and idx < len(close)):
-                        
-                        stock_performance = close[idx] / close[idx - 33]
-                        spy_performance = close_spy[arr_idx] / close_spy[arr_idx - 33]
-                        
-                        if stock_performance > spy_performance:
-                            E4 = "1"
-                        else:
-                            E4 = "0"
-                    else:
-                        E4 = "0" 
-                        
-                except ValueError:
-                    E4 = "0"
-                
-                #####################################
-                # E5. Latest price is at top half of 5-day range and current price > price of 5 days ago 
-                # and current price is less than 7% drawdown from 66D high
-                # (close - lowest(low, 5))/(highest(high, 5) - lowest(low, 5)) > 0.5
-                # close - close[5] > 0
-                # (highest(high, 66) - close)/highest(high, 66) < 0.07
-                
-                # lowest(low, 5) - get min low of last 5 days including current
-                start_idx_5 = max(0, idx - 4)  # Last 5 days including current
-                min5 = min(low[start_idx_5:idx + 1])
-                    
-                # highest(high, 5) - get max high of last 5 days including current
-                max5 = max(high[start_idx_5:idx + 1])
-                    
-                # lowest(low, 250) - get min low of last 250 days including current
-                start_idx_250 = max(0, idx - 249)  # Last 250 days including current
-                    
-                # highest(high, 250) - get max high of last 250 days including current
-                max250 = max(high[start_idx_250:idx + 1])
-                    
-                # Check all three E5 conditions
-                condition1 = (close[idx] - min5) / (max5 - min5) > 0.5 if max5 != min5 else False
-                condition2 = close[idx] - close[idx - 5] > 0 if idx >= 5 else False
-                condition3 = (max250 - close[idx]) / max250 < 0.07 if max250 != 0 else False
-                    
-                if condition1 and condition2 and condition3:
-                    E5 = "1"
-                else:
-                    E5 = "0"
-                    
+                E1 = calculate_E1(high, low, close, idx)
+                E2 = calculate_E2(close, idx)
+                E3 = calculate_E3(close, idx)
+                E4 = calculate_E4(close, close_spy, sdate, sdate_spy, idx)
+                E5 = calculate_E5(high, low, close, idx)
             else:
-                E1 = "N/A"
-                E2 = "N/A"
-                E3 = "N/A"
-                E4 = "N/A"
-                E5 = "N/A"
+                E1 = E2 = E3 = E4 = E5 = "N/A"
             
             # Store indicators for this record (we're already processing only the 16 days we want)
             all_indicators.append({
@@ -344,29 +371,3 @@ def calculate_energy_indicators_last_16_days(trade_day: str, stock_data: List[St
             "indicators": []
         }
 
-def calculate_energy_indicators_single_day(stockname: str, trade_day: str, stock_data: List[StockRecord], stock_data_2800: List[StockRecord]) -> Dict[str, Any]:
-    """
-    Calculate E1-E5 energy indicators for a single day (original function)
-    
-    Args:
-        stockname: Stock code/name
-        trade_day: Trade date in format 'YYYY-MM-DD'
-        stock_data: List of stock price records
-        stock_data_2800: List of reference index (2800) price records
-        
-    Returns:
-        Dictionary with E1-E5 indicators for the specified date
-    """
-    # Call the 16-day function and return only the last day
-    result = calculate_energy_indicators_last_16_days(trade_day, stock_data, stock_data_2800)
-    
-    if result["status"] == "success" and result["indicators"]:
-        # Return only the last day (target date)
-        last_day_indicator = result["indicators"][-1]
-        return {
-            "status": "success",
-            "message": f"Energy indicators calculated for {stockname} on {trade_day}",
-            "indicators": [last_day_indicator]
-        }
-    else:
-        return result

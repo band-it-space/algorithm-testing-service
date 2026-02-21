@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 
 import requests
-from datetime import datetime, date
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 load_dotenv()
@@ -105,12 +105,12 @@ async def get_stock_data_from_db(code: str, end_date: str | None = None):
         
     return stock_records
 
-async def get_api_stocks_data(code: str, end_date: str | None = None):
+async def us_api_stocks_data(code: str, end_date: str | None = None, verify_type: str = "price", trade_day: str = ""):
     """Отримати дані про акції з API."""
     if not US_KING_API_KEY:
-        raise RuntimeError("STOCKFISHER_API_KEY not found in environment variables")
+        raise RuntimeError("US_KING_API_KEY not found in environment variables")
     
-    API_URL = f'http://ete.stockfisher.com.hk/v1.1/debugUSStock/verifyData?TradeDay=&Code={code}&verifyType=price'
+    API_URL = f'http://ete.stockfisher.com.hk/v1.1/debugUSStock/verifyData?TradeDay={trade_day}&Code={code}&verifyType={verify_type}'
     headers = {'x-api-key': US_KING_API_KEY}
     
     try:
@@ -122,40 +122,67 @@ async def get_api_stocks_data(code: str, end_date: str | None = None):
         return []
     
     stock_records = []
-    for row in stock_data_api:
-        trade_date = datetime.fromisoformat(row["TradeDay"].replace('Z', '+00:00')).strftime("%Y-%m-%d")
+    if verify_type == "price":
+        for row in stock_data_api:
+            trade_date = datetime.fromisoformat(row["TradeDay"].replace('Z', '+00:00')).strftime("%Y-%m-%d")
         
-        if end_date and trade_date > end_date:
-            continue
+            if end_date and trade_date > end_date:
+                continue
+                
+            adj_open = row.get("Open") or 0
+            adj_high = row.get("High") or 0
+            adj_low = row.get("Low") or 0
+            adj_close = row.get("Close") or 0
+            adj_volume = row.get("Volume") or 0
             
-        adj_open = row.get("Open") or 0
-        adj_high = row.get("High") or 0
-        adj_low = row.get("Low") or 0
-        adj_close = row.get("Close") or 0
-        adj_volume = row.get("Volume") or 0
-        
-        if (adj_open > 0 and 
-            adj_high > 0 and 
-            adj_low > 0 and 
-            adj_close > 0 and 
-            adj_volume > 0):
+            if (adj_open > 0 and 
+                adj_high > 0 and 
+                adj_low > 0 and 
+                adj_close > 0 and 
+                adj_volume > 0):
+                
+                stock_records.append({
+                    "date": trade_date,
+                    "time": "00:00:00",
+                    "open": float(adj_open),
+                    "high": float(adj_high),
+                    "low": float(adj_low),
+                    "close": float(adj_close),
+                    "volume": int(adj_volume),
+                })
+    
+        stock_records.sort(key=lambda x: x["date"])
+    
+        empty_records = [rec for rec in stock_records if rec["open"] == 0]
+        if empty_records:
+            print("⚠️ Empty records found at dates:", ", ".join(rec["date"] for rec in empty_records))
+    
+        stock_records = [rec for rec in stock_records if rec not in empty_records]
+    else:
+        for row in stock_data_api:
             
+            trade_date = datetime.fromisoformat(row["tradeday"].replace('Z', '+00:00')).strftime("%Y-%m-%d")
+
+            if end_date and trade_date > end_date:
+                continue
+            
+            entry_date = None
+            if row.get("entry_date"):
+                entry_date = datetime.fromisoformat(row["entry_date"].replace('Z', '+00:00')).strftime("%Y-%m-%d")
+
+
             stock_records.append({
                 "date": trade_date,
                 "time": "00:00:00",
-                "open": float(adj_open),
-                "high": float(adj_high),
-                "low": float(adj_low),
-                "close": float(adj_close),
-                "volume": int(adj_volume),
+                "position_status": row.get("position_status", ""),
+                "entry_date": entry_date,
+
+                "next_open_action": row.get("next_open_action", ""),
+                "today_open_action": row.get("today_open_action", ""),
+                
+                "exit1": row.get("exit1", ""),
+                "entry_price": row.get("entry_price", 0),
             })
     
-    stock_records.sort(key=lambda x: x["date"])
-    
-    empty_records = [rec for rec in stock_records if rec["open"] == 0]
-    if empty_records:
-        print("⚠️ Empty records found at dates:", ", ".join(rec["date"] for rec in empty_records))
-    
-    stock_records = [rec for rec in stock_records if rec not in empty_records]
-        
+        stock_records.sort(key=lambda x: x["date"])
     return stock_records

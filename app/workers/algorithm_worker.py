@@ -9,7 +9,8 @@ from datetime import datetime
 from app.services.queue_service import QueueService
 from app.workers.algo_func.get_db_data import get_stock_data_from_db, init_db_pool
 from app.services.file_service import FileService
-from app.workers.algo_func.buy_signals import runAllBuyConditions, isBuy, OHLCV
+from app.workers.algo_func.buy_signals import runAllBuyConditions, isBuy
+from app.workers.algo_func.types import OHLCV
 from typing import Optional, Dict, Any, List, Union
 from app.workers.algo_func.sell_signals import runAllSellConditions, isSell
 from app.workers.algo_func.get_code_energy import calculate_energy_indicators_last_16_days
