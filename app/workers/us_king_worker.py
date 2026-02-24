@@ -22,9 +22,13 @@ from app.workers.algo_func.sell_king import runAllSellConditions_US, isSell_US
 logger = logging.getLogger(__name__)
 API_KEY = os.getenv('API_KEY')
 
-START_DATE = "2023-04-17"
-END_DATE = "2023-09-15;"
+START_DATE = "2019-01-01"
+END_DATE = "2026-02-20;"
 BENCHMARK_CODE = "SPY"
+
+INVESTED_AMOUNT = 10000
+RESULTS_FILE_NAME = "us_king_results"
+PROFIT_FILE_NAME = "us_king_profit_records"
 
 @dataclass
 class DailyTradingState:
@@ -46,6 +50,17 @@ class DailyTradingState:
     entry_price: float
     exit_price: float
     exit1: float = 0.0
+
+@dataclass
+class ProfitRecord:
+    symbol: str
+    entryDay: str
+    entryPrice: float
+    exitDay: str
+    exitPrice: float | Literal["Open position"]
+    profit: float | Literal[""]
+    profit_percent: float | Literal[""]
+    invested: float
 
 
 async def process_us_king_task(task_data):
@@ -84,6 +99,7 @@ async def process_us_king_task(task_data):
             return
     
         logger.info(f"Stage 2 completed")
+
 
         #========================================
         #Stage 3 - Calculate buy/sell signals
@@ -218,15 +234,16 @@ async def process_us_king_task(task_data):
                 logger.info(f"For date {trade_date}, is_sell_signal: {is_sell}")
 
             elif current_position_status == "F":
-                # Ми НЕ в позиції -> перевіряємо BUY сигнали
                 logger.info(f"------- Running US King Buy conditions for {trade_date} -------")
                 
                 buy_results = runAllBuyConditions_US(stock_ohlcv, benchmark_ohlcv, trade_date)
+                
                 buy_results_formatted = ",".join(
                     "1" if buy_results.get(key, False) else "0" 
                     for key in ['B1', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B18', 'B20', 'B21', 'B22']
                 )
-                logger.info(f"Buy results: {buy_results_formatted}, stop_loss: {buy_results.get('stop_loss')}")
+
+                logger.info(f"Buy results (binary): {buy_results_formatted}, stop_loss: {buy_results.get('stop_loss')}")
 
                 is_buy = isBuy_US(buy_results)
                 
@@ -276,6 +293,8 @@ async def process_us_king_task(task_data):
 
         logger.info(f"Stage 3 completed!")
 
+
+
         #========================================
         # Stage 4 - Signal comparison
         logger.info("Starting Stage 4: Signal comparison")
@@ -287,20 +306,19 @@ async def process_us_king_task(task_data):
         
         comparison_results = compare_signals_with_tolerance(historical_data, filtered_api_data)
 
-        # Log detailed results
-        logger.info(f"=== Signal Comparison Results ===")
-        logger.info(f"Total API signals: {comparison_results['total_api']}")
-        logger.info(f"Total Algo signals: {comparison_results['total_algo']}")
-        logger.info(f"Exact matches: {comparison_results['total_exact']}")
-        logger.info(f"Deviation matches (±2 days): {comparison_results['with_deviation']}")
-        logger.info(f"Unmatched API: {comparison_results['unmatched_api']}")
-        logger.info(f"Unmatched Algo: {comparison_results['unmatched_algo']}")
-        logger.info(f"Match percent: {comparison_results['match_percent']}%")
-
         # Save comparison report
         await save_comparison_report(stock_code, comparison_results)
 
         logger.info(f"Stage 4 completed: Signal comparison finished")
+
+        #========================================
+        # Stage 5 - Calculate and save profit records
+        logger.info("Starting Stage 5: Profit calculation")
+        
+        profit_records = calculate_profit_records(historical_data, stock_code)
+        await save_profit_records(stock_code, profit_records)
+        
+        logger.info(f"Stage 5 completed: Profit records saved ({len(profit_records)} records)")
     except Exception as e:
         logger.error(f"Error processing US King task {task_data['task_id']}: {str(e)}")
         raise e
@@ -577,6 +595,122 @@ def _compare_signal_lists(
     }
 
 
+def calculate_profit_records(historical_data: List[DailyTradingState], stock_code: str) -> List[ProfitRecord]:
+    """
+    Calculate profit records from historical trading data.
+    
+    Args:
+        historical_data: List of daily trading states
+        stock_code: Stock symbol
+        
+    Returns:
+        List of ProfitRecord objects
+    """
+    profit_records: List[ProfitRecord] = []
+    current_trade = None
+    
+    logger.info(f"=== Calculating profit records for {stock_code} ===")
+    logger.info(f"Total historical data points: {len(historical_data)}")
+    
+    for state in historical_data:
+        # Detect trade entry: position opened and entry_date is set
+        if state.position_status == "I" and state.entry_date is not None and current_trade is None:
+            current_trade = {
+                "symbol": stock_code,
+                "entryDay": state.entry_date,
+                "entryPrice": state.entry_price
+            }
+            logger.info(
+                f"📈 TRADE OPENED on {state.entry_date}: "
+                f"Entry price: ${state.entry_price:.4f}, "
+                f"Stop loss (exit1): ${state.exit1:.4f}"
+            )
+        
+        # Detect trade exit: signal to sell while in position
+        if state.position_status == "I" and state.next_open_action == "S" and current_trade is not None:
+            exit_price = state.exit_price
+            entry_price = current_trade["entryPrice"]
+            
+            # Calculate profit and profit percentage
+            profit_percent = ((exit_price - entry_price) / entry_price) * 100
+            profit = INVESTED_AMOUNT * ((exit_price - entry_price) / entry_price)
+            
+            profit_records.append(ProfitRecord(
+                symbol=current_trade["symbol"],
+                entryDay=current_trade["entryDay"],
+                entryPrice=entry_price,
+                exitDay=state.trade_date,
+                exitPrice=exit_price,
+                profit=profit,
+                profit_percent=profit_percent,
+                invested=INVESTED_AMOUNT
+            ))
+            
+            logger.info(
+                f"📉 TRADE CLOSED on {state.trade_date}: "
+                f"Exit price: ${exit_price:.4f}, "
+                f"Profit: ${profit:.2f} ({profit_percent:.2f}%), "
+                f"Holding period: {state.entry_date} → {state.trade_date}"
+            )
+            current_trade = None
+    
+    # Handle open position at end of period
+    if current_trade is not None:
+        profit_records.append(ProfitRecord(
+            symbol=current_trade["symbol"],
+            entryDay=current_trade["entryDay"],
+            entryPrice=current_trade["entryPrice"],
+            exitDay="",
+            exitPrice="Open position",
+            profit="",
+            profit_percent="",
+            invested=INVESTED_AMOUNT
+        ))
+        logger.info(
+            f"🔓 OPEN POSITION at end of period: "
+            f"Entry {current_trade['entryDay']} @ ${current_trade['entryPrice']:.4f}"
+        )
+    
+    logger.info(f"=== Total profit records generated: {len(profit_records)} ===")
+    return profit_records
+
+
+async def save_profit_records(stock_code: str, profit_records: List[ProfitRecord]):
+    """Save profit records to CSV file."""
+    try:
+        if not profit_records:
+            logger.info(f"No profit records to save for {stock_code}")
+            return
+        
+        # Convert ProfitRecord objects to dictionaries for CSV
+        records_data = [
+            {
+                "symbol": record.symbol,
+                "entryDay": record.entryDay,
+                "entryPrice": f"{record.entryPrice:.4f}" if isinstance(record.entryPrice, float) else record.entryPrice,
+                "exitDay": record.exitDay,
+                "exitPrice": f"{record.exitPrice:.4f}" if isinstance(record.exitPrice, float) else record.exitPrice,
+                "profit": f"{record.profit:.2f}" if isinstance(record.profit, float) else record.profit,
+                "Profit %": f"{record.profit_percent:.2f}" if isinstance(record.profit_percent, float) else record.profit_percent,
+                "Invested": str(int(record.invested))
+            }
+            for record in profit_records
+        ]
+        
+        fieldnames = [
+            "symbol", "entryDay", "entryPrice", 
+            "exitDay", "exitPrice", 
+            "profit", "Profit %", "Invested"
+        ]
+        
+        file_service = FileService()
+        await file_service.add_data_to_csv(PROFIT_FILE_NAME, records_data, fieldnames)
+        
+        logger.info(f"Profit records saved to {PROFIT_FILE_NAME}.csv")
+    except Exception as e:
+        logger.error(f"Failed to save profit records: {str(e)}")
+
+
 async def save_comparison_report(stock_code: str, comparison_results: Dict[str, Any]):
     """Save comparison report to CSV file."""
     try:
@@ -603,9 +737,9 @@ async def save_comparison_report(stock_code: str, comparison_results: Dict[str, 
         ]
         
         file_service = FileService()
-        await file_service.add_data_to_csv('us_king_results', results_data, field_names)
+        await file_service.add_data_to_csv(RESULTS_FILE_NAME, results_data, field_names)
         
-        logger.info(f"Comparison report saved to us_king_results.csv")
+        logger.info(f"Comparison report saved to {RESULTS_FILE_NAME}.csv")
     except Exception as e:
         logger.error(f"Failed to save comparison report: {str(e)}")
 

@@ -379,7 +379,7 @@ def checkS6_US(
     window = stock_prices[-lookback_period:]
     
     # Extract highs and find maximum
-    highs = [float(bar.high) for bar in window]
+    highs = [float(bar.close) for bar in window]
     max_high = max(highs)
     
     # Find LAST occurrence of max_high (search from end)
@@ -1067,12 +1067,8 @@ def checkS19_US(
     if len(stock_prices) < atr_period + lookback_period + 1:
         return False
     
-    # Calculate days since entry
+    # Calculate days since entry (for logging only)
     days_since_entry = len(stock_prices) - 1 - entry_index
-    
-    # S19 active from day 1 after entry (no explicit activation in MC)
-    if days_since_entry <= 0:
-        return False
     
     # Extract price data for ATR calculation
     highs = [float(bar.high) for bar in stock_prices]
@@ -1093,18 +1089,21 @@ def checkS19_US(
     max_vol = 0
     max_idx = -1
     
+    # logger.info(
+    #     f"S19_US - Day {days_since_entry}: Searching for highest volume UP day in last {lookback_period} days. "
+    #     f"Entry price: {buy_price:.2f}"
+    # )
+    
     for i in range(1, lookback_period + 1):
         day_idx = current_idx - i  # Yesterday to 41 days ago
         older_day_idx = day_idx - 1  # Day BEFORE (older in history)
-        atr_idx = day_idx - (atr_period - 1)  # ATR array index
         
         # Need at least one day before for UP day comparison
         if day_idx <= 0 or older_day_idx < 0:
             continue
-        if atr_idx < 0 or atr_idx >= len(atr10_values):
-            continue
         
-        atr10 = atr10_values[atr_idx]
+        # ATR array is same length as price arrays - direct access
+        atr10 = atr10_values[day_idx]
         if atr10 is None or atr10 <= 0:
             continue
         
@@ -1120,29 +1119,29 @@ def checkS19_US(
         is_max_volume = volumes[day_idx] > max_vol
         
         if is_below_entry and is_up_day and is_max_volume:
+            # logger.info(
+            #     f"  → Day {i} days ago: NEW MAX - close={closes[day_idx]:.2f} > prev_close={closes[older_day_idx]:.2f}, "
+            #     f"volume={volumes[day_idx]:.0f}, low={lows[day_idx]:.2f}, ATR(10)={atr10:.3f}, "
+            #     f"hard_stop={hard_stop:.2f} (< entry {buy_price:.2f})"
+            # )
             max_vol = volumes[day_idx]
             max_idx = day_idx
     
     # If no qualifying day found, no exit signal
     if max_idx < 0:
         # logger.info(
-        #     f"S19_US - Day {days_since_entry}: No qualifying day found. "
-        #     f"Searched last {lookback_period} days, max_vol={max_vol}"
+        #     f"S19_US - Day {days_since_entry}: ❌ No qualifying day found. "
+        #     f"Searched last {lookback_period} days, NO EXIT"
         # )
         return False
     
     # Calculate hard stop of the reference day
-    atr_idx = max_idx - (atr_period - 1)
-    if atr_idx < 0 or atr_idx >= len(atr10_values):
-        # logger.warning(
-        #     f"S19_US - ATR index out of range: atr_idx={atr_idx}, "
-        #     f"len(atr10_values)={len(atr10_values)}"
-        # )
-        return False
-    
-    atr10 = atr10_values[atr_idx]
+    # ATR array is same length as price arrays - direct access
+    atr10 = atr10_values[max_idx]
     if atr10 is None or atr10 <= 0:
-        # logger.warning(f"S19_US - Invalid ATR value: {atr10}")
+        # logger.warning(
+        #     f"S19_US - Day {days_since_entry}: Invalid ATR value at max_idx={max_idx}: {atr10}"
+        # )
         return False
     
     hard_stop = lows[max_idx] - atr_factor * atr10
@@ -1153,11 +1152,12 @@ def checkS19_US(
     # Exit if current close below hard stop
     exit_signal = current_close < hard_stop
     
+    days_ago = current_idx - max_idx
     # logger.info(
-    #     f"S19_US - Day {days_since_entry}: "
-    #     f"Reference day {current_idx - max_idx} days ago, "
-    #     f"volume={max_vol:.0f}, hard_stop={hard_stop:.2f}, "
-    #     f"current_close={current_close:.2f}, exit={exit_signal}"
+    #     f"S19_US - Day {days_since_entry}: 📊 Reference day: {days_ago} days ago, "
+    #     f"volume={max_vol:.0f}, low={lows[max_idx]:.2f}, ATR(10)={atr10:.3f}, "
+    #     f"hard_stop={hard_stop:.2f}, current_close={current_close:.2f}, "
+    #     f"{'🚨 EXIT SIGNAL!' if exit_signal else '✅ No exit'}"
     # )
     
     return exit_signal

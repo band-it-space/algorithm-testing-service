@@ -104,35 +104,42 @@ def checkB8_US(
     
     MC Code Reference:
     - lowestbar(low, input_higher_low_len=150) > input_higher_low_threshold=85
-    - This means: the lowest low in last 150 days occurred MORE than 85 days ago
-    - Equivalent: min(last 85 days) > min(days 86 to 150)
+    - This means: the BAR (position) where lowest low occurred is MORE than 85 bars ago
+    - lowestbar() returns bars ago (0=today, 1=yesterday, etc.)
+    - If lowestbar returns 86, it means lowest low was 86 days ago -> 86 > 85 -> TRUE
+    - If lowestbar returns 85, it means lowest low was 85 days ago -> 85 > 85 -> FALSE
+    - If lowestbar returns 50, it means lowest low was 50 days ago -> 50 > 85 -> FALSE
     
-    Example:
-    - If lookback_period=150 and recent_period=85:
-    - Recent low = min(last 85 days)
-    - Past low = min(days 86-150, which is 65 days before the recent period)
-    - Returns True if recent_low > past_low (higher low pattern)
+    CORRECT LOGIC: Find WHEN (bars ago) the lowest low occurred, not WHAT VALUE
     """
     if len(stock_prices) < lookback_period:
         return False
     
     lows = [bar.low for bar in stock_prices]
+    # current_date = stock_prices[-1].date
     
-    recent_low = min(lows[-recent_period:])
+    # Find the minimum low value in the last 150 days
+    lowest_value = min(lows[-lookback_period:])
     
-    past_range = lows[-lookback_period:-recent_period -1]
+    # Find how many bars ago this lowest low occurred
+    # lowestbar() returns bars ago: 0 = today, 1 = yesterday, etc.
+    # We search from most recent (index 0) to oldest (index lookback_period-1)
+    bars_ago = next(i for i in range(lookback_period) if lows[-(i+1)] == lowest_value)
     
-    if not past_range:
-        return False
+    # In MultiCharts: lowestbar(low, 150) > 85
+    # If lowest low was more than 85 days ago, it's a higher low pattern
+    result = bars_ago > recent_period
     
-    past_low = min(past_range)
-    
-    result = recent_low > past_low
+    # Get the date and absolute index for logging
+    # lowest_idx = len(lows) - 1 - bars_ago
+    # lowest_date = stock_prices[lowest_idx].date
     
     # logger.info(
-    #     f"B8_US - Recent {recent_period}D low: {recent_low:.2f}, "
-    #     f"Past {lookback_period-recent_period}D low: {past_low:.2f}, "
-    #     f"Higher low pattern: {result}"
+    #     f"B8_US - Current date: {current_date}\n"
+    #     f"  Lowest low in past {lookback_period} days:\n"
+    #     f"    Value: {lowest_value:.4f} on {lowest_date} ({bars_ago} bars ago)\n"
+    #     f"  Threshold: {recent_period} bars\n"
+    #     f"  Result: {result} (lowestbar {bars_ago} > {recent_period}: {bars_ago > recent_period})"
     # )
     
     return result
@@ -1003,7 +1010,7 @@ def runAllBuyConditions_US(
         'B10': checkB10(stock_prices),  # Shared with HK
         'B11': checkB11_US(stock_prices),
         'B12': checkB12(stock_prices),  # Shared with HK
-        'B13': checkB13(stock_prices, spy_prices, input_B13_XX=19, input_B13_YY=100),  # US params
+        'B13': checkB13(stock_prices, spy_prices, input_B13_XX=19, input_B13_YY=100),  # US params with 0.75% tolerance
         'B18': checkB18_US(stock_prices),
         'B20': checkB20_US(stock_prices),
         'B21': checkB21_US(stock_prices),

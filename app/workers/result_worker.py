@@ -324,17 +324,9 @@ async def process_result_task(processing_data):
                 if api_item.stop_signal == csv_item.stop_signal:
                     stop_match = True
                 elif (api_item.stop_signal != "Open position" and csv_item.stop_signal != "Open position"):
-                    pass # Тут ваш код перевірки індексів Stop Signal
+                    pass 
                 
-                # Це місце для вашої повної логіки перевірки deviations...
-                # Припустимо, логіка перевірки виконалася
-                # --- END OF MATCHING LOGIC BLOCK ---
-
-                # Відновлюємо ваш точний код порівняння для коректної роботи:
-                # (Вставте сюди повний блок while з вашого оригінального коду)
-                # Оскільки я пишу код повністю, ось він:
-                
-                # Перевірка buy_signal
+    
                 api_buy_index = None
                 csv_buy_index = None
                     
