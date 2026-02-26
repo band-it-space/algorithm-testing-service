@@ -22,9 +22,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from app.workers.algorithm_worker import (
     process_algorithm_task,
-    get_data_and_save_to_csv,
+    compute_seed_row,
     signals_for_the_period,
-    format_signals_csv_inplace,
+    format_signals_in_memory,
 )
 from app.workers.algo_func.get_db_data import get_stock_data_from_db, init_db_pool
 from app.workers.algo_func.buy_signals import runAllBuyConditions, isBuy, OHLCV
@@ -100,34 +100,37 @@ async def generate_pipeline_reference():
     """Run the full pipeline and save the final CSV as reference."""
     genome_file = f"{STOCK}_{GENOME}"
 
-    # Run the full pipeline (same as process_algorithm_task does)
-    await get_data_and_save_to_csv(STOCK, START_DATE, GENOME, file_name=genome_file)
+    # Run the full pipeline in-memory (same as process_algorithm_task does)
+    code_data_raw = await get_stock_data_from_db(STOCK, END_DATE)
+    seed_row = compute_seed_row(STOCK, START_DATE, GENOME, code_data_raw)
 
     params = AlgorithmParameters()
-    await signals_for_the_period(STOCK, END_DATE, params, GENOME, file_name=genome_file)
+    signals_batch = await signals_for_the_period(
+        STOCK, END_DATE, params, GENOME,
+        code_data_raw=code_data_raw,
+        initial_signal=seed_row
+    )
 
-    file_service = FileService()
-    await format_signals_csv_inplace(file_service=file_service, file_name=genome_file, genome_id=GENOME)
+    trade_pairs = format_signals_in_memory(signals_batch, genome_id=GENOME)
 
-    # Copy the final CSV into reference folder
-    src = f"data/{genome_file}.csv"
-    if os.path.exists(src):
-        dst = os.path.join(REF_DIR, "final_trades_reference.csv")
-        shutil.copy2(src, dst)
+    # Write trade pairs to reference CSV
+    dst = os.path.join(REF_DIR, "final_trades_reference.csv")
+    if trade_pairs:
+        import csv as csv_mod
+        fieldnames = list(trade_pairs[0].keys())
+        with open(dst, 'w', newline='', encoding='utf-8') as f:
+            writer = csv_mod.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(trade_pairs)
         print(f"  Saved final trades reference CSV: {dst}")
-
-        # Count rows for verification
-        with open(dst, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
-            print(f"  Final CSV contains {len(rows)} rows")
-            if rows:
-                print(f"  Columns: {list(rows[0].keys())}")
-                print(f"  First row date: {rows[0].get('tradeday', 'N/A')}")
-                print(f"  Last row date:  {rows[-1].get('tradeday', 'N/A')}")
+        print(f"  Final CSV contains {len(trade_pairs)} rows")
+        if trade_pairs:
+            print(f"  Columns: {list(trade_pairs[0].keys())}")
+            print(f"  First row date: {trade_pairs[0].get('tradeday', 'N/A')}")
+            print(f"  Last row date:  {trade_pairs[-1].get('tradeday', 'N/A')}")
         return True
     else:
-        print(f"  ERROR: Expected output file not found: {src}")
+        print(f"  ERROR: No trade pairs generated")
         return False
 
 

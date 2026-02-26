@@ -14,6 +14,10 @@ from app.services.results_aggregation_service import (
     calculate_genome_metrics,
     format_results_for_output,
     get_output_fieldnames,
+    get_per_genome_output_fieldnames,
+    get_averaged_output_fieldnames,
+    compute_averaged_metrics,
+    calculate_averaged_deltas,
 )
 
 # --- CONFIGURATION ---
@@ -21,6 +25,7 @@ FIXED_DEPOSIT_AMOUNT = 10000.0
 GENERAL_RESULTS_FILE = "general_results"
 OPTIMIZATION_RESULTS_FILE = "optimization_results"
 AUTOMATED_RESULTS_FILE = "Automated Results"
+AUTOMATED_RESULTS_PER_GENOME_FILE = "Automated Results Per Genome"
 
 class ErrorResponse(TypedDict):
     error: str
@@ -30,10 +35,24 @@ logger = logging.getLogger(__name__)
 
 API_KEY = os.getenv('API_KEY')
 # Date range from environment (with fallback defaults)
-START_DATE = os.getenv('OPTIMIZATION_START_DATE', '2025-01-01')
-END_DATE = os.getenv('OPTIMIZATION_END_DATE', '2026-02-02')
+START_DATE = os.getenv('OPTIMIZATION_START_DATE', '2009-03-09')
+END_DATE = os.getenv('OPTIMIZATION_END_DATE', '2019-03-07')
 
 file_service = FileService()
+
+
+def _load_trade_pairs_from_redis(optimization_id, stock_code, genome_id):
+    """Load trade pairs stored by algorithm worker and delete the key after read."""
+    import json
+    client = QueueService.get_redis_client()
+    key = f"trade_pairs:{optimization_id or 'single'}:{stock_code}:{genome_id}"
+    raw = client.get(key)
+    if raw is None:
+        logger.warning(f"No trade pairs found in Redis for key={key}")
+        return []
+    client.delete(key)
+    return json.loads(raw)
+
 
 # --- HELPERS ---
 def _to_float_or_zero(value) -> float:
@@ -135,7 +154,7 @@ async def save_genome_optimization_results(
 ):
     """
     Calculate and save optimization results for a genome.
-    Matches Output Results Sample.csv format.
+    Writes per-stock results to Per Genome CSV and triggers averaging when all stocks done.
     """
     if not algo_data:
         logger.warning(f"No algo data for {stock_code}/{genome_id}")
@@ -152,34 +171,23 @@ async def save_genome_optimization_results(
     # Format for output
     output_row = result.to_output_row()
     
-    # Add optimization_id if present
+    # 1. Write to optimization_results.csv (unchanged)
     if optimization_id:
-        output_row["optimization_id"] = optimization_id
+        opt_row = {**output_row, "optimization_id": optimization_id}
+        opt_fieldnames = ["optimization_id"] + get_output_fieldnames()
+        await file_service.add_data_to_csv(OPTIMIZATION_RESULTS_FILE, [opt_row], opt_fieldnames)
     
-    # Save to optimization results file
-    fieldnames = get_output_fieldnames()
-    if optimization_id:
-        fieldnames = ["optimization_id"] + fieldnames
-    
-    await file_service.add_data_to_csv(
-        OPTIMIZATION_RESULTS_FILE,
-        [output_row],
-        fieldnames
-    )
-    
-    # Also write to "Automated Results.csv" in the same trade statistics format
-    automated_fieldnames = get_output_fieldnames()
-    automated_row = {k: v for k, v in output_row.items() if k != "optimization_id"}
-    # Add "(BASE)" suffix for G_000 per Output Results Sample.csv format
+    # 2. Write to "Automated Results Per Genome.csv" (per-stock, no params)
+    per_genome_row = {k: v for k, v in output_row.items() if k in get_per_genome_output_fieldnames()}
     if genome_id == "G_000":
-        automated_row["Genome ID"] = "G_000 (BASE)"
+        per_genome_row["Genome ID"] = "G_000 (BASE)"
     await file_service.add_data_to_csv(
-        AUTOMATED_RESULTS_FILE,
-        [automated_row],
-        automated_fieldnames
+        AUTOMATED_RESULTS_PER_GENOME_FILE,
+        [per_genome_row],
+        get_per_genome_output_fieldnames()
     )
     
-    # Store in Redis for Google Sheets output
+    # 3. Store per-stock result in Redis
     if optimization_id:
         try:
             from app.services.optimization_service import OptimizationService
@@ -192,10 +200,105 @@ async def save_genome_optimization_results(
             logger.debug(f"Stored result in Redis for {genome_id}/{stock_code}")
         except Exception as e:
             logger.error(f"Failed to store result in Redis: {e}")
+        
+        # 4. Track per-genome stock completion
+        try:
+            await _check_genome_completion(optimization_id, genome_id, parameters)
+        except Exception as e:
+            logger.error(f"Failed genome completion check for {genome_id}: {e}")
     
-    logger.info(f"Saved optimization result for {genome_id}/{stock_code}: {result.trade_count} trades, profit: {result.profit_percent:.2f}%")
-    
+    logger.info(
+        f"Saved optimization result for {genome_id}/{stock_code}: "
+        f"{result.trade_count} trades, PR: {result.payoff_ratio:.2f}"
+    )
     return result
+
+
+async def _check_genome_completion(optimization_id: str, genome_id: str, parameters: Dict[str, Any]):
+    """
+    Check if all stock_codes for this genome are done.
+    If so, compute averaged metrics and trigger smart filtering.
+    """
+    from app.services.optimization_service import OptimizationService
+    from app.config.smart_filtering_config import SMART_FILTERING_ENABLED
+    from app.models.algorithm_models import AlgorithmParameters
+
+    metadata = OptimizationService.get_optimization(optimization_id)
+    if not metadata:
+        return
+
+    stock_count = len(metadata.stock_codes)
+    done_count = OptimizationService.increment_genome_stock_done(optimization_id, genome_id)
+
+    if done_count < stock_count:
+        return  # Not all stocks done yet
+
+    # --- All stocks for this genome are complete ---
+    logger.info(f"All {stock_count} stocks completed for genome {genome_id}, computing average")
+
+    # 1. Fetch all per-stock results from Redis
+    all_results = OptimizationService.get_optimization_results(optimization_id)
+    per_stock_results = []
+    for key, result in all_results.items():
+        if key.startswith(f"{genome_id}:"):
+            per_stock_results.append(result)
+
+    if not per_stock_results:
+        logger.warning(f"No per-stock results found for {genome_id}")
+        return
+
+    # 2. Get variable param names and values
+    variable_param_names = metadata.variable_param_names
+    params = AlgorithmParameters.from_dict(parameters)
+    output_params = params.get_variable_params_for_output(variable_param_names)
+
+    # 3. Compute averaged metrics
+    averaged = compute_averaged_metrics(per_stock_results, genome_id, output_params)
+    if not averaged:
+        return
+
+    # 4. Compute deltas vs averaged BASE
+    base_result = OptimizationService.get_averaged_results(optimization_id).get("G_000")
+    if base_result:
+        averaged = calculate_averaged_deltas(averaged, base_result)
+
+    # 5. Write to "Automated Results.csv" (averaged format)
+    if genome_id == "G_000":
+        averaged["Genome ID"] = "G_000 (BASE)"
+
+    fieldnames = get_averaged_output_fieldnames(variable_param_names)
+    await file_service.add_data_to_csv(AUTOMATED_RESULTS_FILE, [averaged], fieldnames)
+
+    # Restore genome_id for Redis storage (without " (BASE)" suffix)
+    storage_row = {**averaged}
+    if genome_id == "G_000":
+        storage_row["Genome ID"] = "G_000"
+
+    # 6. Store averaged result in Redis
+    OptimizationService.store_averaged_result(optimization_id, genome_id, storage_row)
+
+    # 7. Smart filtering trigger
+    if SMART_FILTERING_ENABLED and genome_id != "G_000":
+        try:
+            from app.services.smart_filtering_service import SmartFilteringService
+
+            avg_payoff_ratio = float(averaged.get("Payoff Ratio", 0))
+            param_values = output_params
+
+            SmartFilteringService.record_genome_result(
+                optimization_id, genome_id, avg_payoff_ratio, param_values
+            )
+            eliminated = SmartFilteringService.check_and_eliminate(
+                optimization_id, genome_id, avg_payoff_ratio, param_values
+            )
+            if eliminated:
+                for param, value in eliminated:
+                    logger.info(
+                        f"SMART FILTER: Eliminated {param}={value} "
+                        f"after genome {genome_id} (avg PR: {avg_payoff_ratio:.2f})"
+                    )
+        except Exception as e:
+            logger.error(f"Smart filtering error for {genome_id}: {e}")
 
 
 async def load_server_data(stock_code:str) -> Union[Tuple[List[UnifiedTradeSignal], List[Optional[datetime]]], ErrorResponse]:
@@ -363,16 +466,12 @@ async def process_result_task(processing_data):
         genome_id = processing_data.get('genome_id', 'G_000')
         parameters = processing_data.get('parameters', {})
         optimization_id = processing_data.get('optimization_id')
-        results_meta = processing_data.get('results', {})
-        
-        # Use genome-specific CSV file if provided (avoids concurrency issues)
-        genome_file_name = results_meta.get('genome_file_name', stock_code)
         
         logger.info(f"Starting processing data for stock_code: {stock_code}, genome: {genome_id}")
 
-        # Load algorithm results from genome-specific CSV
-        new_algo_data = await file_service.read_data_from_csv(genome_file_name)
-        logger.info(f"Loaded {len(new_algo_data) if new_algo_data else 0} algorithm signals from CSV for stock {stock_code}, genome: {genome_id}")
+        # Load trade pairs from Redis (stored by algorithm worker)
+        new_algo_data = _load_trade_pairs_from_redis(optimization_id, stock_code, genome_id)
+        logger.info(f"Loaded {len(new_algo_data) if new_algo_data else 0} trade pairs from Redis for stock {stock_code}, genome: {genome_id}")
 
         if new_algo_data:
             try:
@@ -397,16 +496,15 @@ async def process_result_task(processing_data):
                     
             except Exception as e:
                 logger.error(f"Failed to save financial summary for {stock_code}/{genome_id}: {e}")
-
-        # Clean up genome-specific temp CSV file
-        if genome_file_name != stock_code:
-            try:
-                temp_file_path = os.path.join(file_service.data_dir, f"{genome_file_name}.csv")
-                if os.path.exists(temp_file_path):
-                    os.remove(temp_file_path)
-                    logger.debug(f"Cleaned up temp file: {temp_file_path}")
-            except Exception as e:
-                logger.warning(f"Failed to clean up temp file {genome_file_name}.csv: {e}")
+        else:
+            # No trade pairs — still track per-genome stock completion so
+            # cross-stock averaging and smart filtering can trigger correctly.
+            if optimization_id:
+                logger.info(f"No trade pairs for {stock_code}/{genome_id}, tracking genome completion only")
+                try:
+                    await _check_genome_completion(optimization_id, genome_id, parameters)
+                except Exception as e:
+                    logger.error(f"Failed genome completion check for {genome_id}: {e}")
 
         # API comparison (existing logic)
         api_result = await load_server_data(stock_code)

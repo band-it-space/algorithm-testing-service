@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import logging
 import os
-import csv
 import requests
 from datetime import datetime
 from bisect import bisect_right
@@ -10,7 +9,6 @@ from typing import Optional, Dict, Any, List, Union
 
 from app.services.queue_service import QueueService
 from app.workers.algo_func.get_db_data import get_stock_data_from_db, init_db_pool, warm_spy_cache
-from app.services.file_service import FileService
 from app.workers.algo_func.buy_signals import runAllBuyConditions, isBuy, OHLCV
 from app.workers.algo_func.sell_signals import runAllSellConditions, isSell
 from app.workers.algo_func.get_code_energy import calculate_energy_indicators_last_16_days
@@ -23,8 +21,8 @@ logger = logging.getLogger(__name__)
 API_KEY = os.getenv('API_KEY')
 
 # Date range from environment (with fallback defaults)
-START_DATE = os.getenv('OPTIMIZATION_START_DATE', '2016-01-01')
-END_DATE = os.getenv('OPTIMIZATION_END_DATE', '2026-02-02')
+START_DATE = os.getenv('OPTIMIZATION_START_DATE', '2009-03-09')
+END_DATE = os.getenv('OPTIMIZATION_END_DATE', '2019-03-07')
 
 # Module-level debug settings
 ALGORITHM_DEBUG = get_algorithm_debug_mode()
@@ -58,42 +56,53 @@ async def process_algorithm_task(task_data):
         
         logger.info(f"Processing algorithm task: {stock_code}, genome: {genome_id}, optimization: {optimization_id}")
         
+        # Smart filtering — skip check (before any DB/computation)
+        from app.config.smart_filtering_config import SMART_FILTERING_ENABLED
+        if SMART_FILTERING_ENABLED and optimization_id and genome_id != "G_000":
+            from app.services.smart_filtering_service import SmartFilteringService
+            if SmartFilteringService.is_genome_skipped(optimization_id, genome_id):
+                # Increment by 1 per task (not batch) to avoid over-counting
+                # when some stocks already completed through the result worker.
+                try:
+                    from app.services.optimization_service import OptimizationService
+                    OptimizationService.increment_completed_tasks(optimization_id, count=1)
+                except Exception as e:
+                    logger.warning(f"Failed to increment tasks for skipped genome {genome_id}: {e}")
+                logger.info(f"SMART FILTER: Skipped genome {genome_id} for {stock_code} (eliminated)")
+                return task_data
+
         with TimingContext("db_pool_init"):
             await init_db_pool()
 
         with TimingContext("spy_cache_warm"):
             await warm_spy_cache(END_DATE)
 
-        genome_file_name = f"{stock_code}_{genome_id}"
-
         with TimingContext("fetch_all_data"):
             code_data_raw = await get_stock_data_from_db(stock_code, END_DATE)
             spy_data_raw = await get_stock_data_from_db("2800", END_DATE)
 
-        logger.info('Starting get_data_and_save_to_csv')
-        seed_row = await get_data_and_save_to_csv(stock_code, START_DATE, genome_id,
-                                                    file_name=genome_file_name,
-                                                    code_data_raw=code_data_raw)
-        logger.info('Finished get_data_and_save_to_csv')
+        seed_row = compute_seed_row(stock_code, START_DATE, genome_id, code_data_raw)
 
         logger.info('Starting signals_for_the_period')
-        await signals_for_the_period(stock_code, END_DATE, params, genome_id,
-                                      file_name=genome_file_name,
+        signals_batch = await signals_for_the_period(stock_code, END_DATE, params, genome_id,
                                       code_data_raw=code_data_raw,
                                       spy_data_raw=spy_data_raw,
                                       initial_signal=seed_row)
         logger.info('Finished signals_for_the_period')
 
-        logger.info('Starting format_signals_csv_inplace')
-        await format_signals_csv_inplace(file_service=FileService(), file_name=genome_file_name, genome_id=genome_id)
-        logger.info('Finished format_signals_csv_inplace')
+        logger.info('Starting format_signals_in_memory')
+        trade_pairs = format_signals_in_memory(signals_batch, genome_id=genome_id)
+        logger.info(f'Formatted {len(trade_pairs)} trade pairs in memory')
+
+        # Store trade pairs in Redis for result worker (no temp files)
+        _store_trade_pairs_in_redis(optimization_id, stock_code, genome_id, trade_pairs)
 
         processing_task_id = QueueService.add_to_result_processing_queue(
             stock_code, 
             genome_id=genome_id, 
             parameters=params.to_dict(),
             optimization_id=optimization_id,
-            results={"genome_file_name": genome_file_name}
+            results={}
         )
         
         logger.info(f"Algorithm task {task_data['task_id']} completed, genome: {genome_id}, added to processing queue: {processing_task_id}")
@@ -109,31 +118,14 @@ async def process_algorithm_task(task_data):
         raise e
 
 
-async def get_data_and_save_to_csv(code: str, trade_date: str, genome_id: str = "G_000",
-                                    file_service: "FileService" = None,
-                                    file_name: str = None,
-                                    code_data_raw=None):
-    if file_service is None:
-        file_service = FileService()
+def compute_seed_row(code: str, trade_date: str, genome_id: str = "G_000",
+                     code_data_raw=None) -> Dict[str, Any]:
+    """Compute the initial seed row in memory (no file I/O)."""
+    effective_date = trade_date
+    if code_data_raw and code_data_raw[0]["date"] > trade_date:
+        effective_date = code_data_raw[0]["date"]
 
-    csv_file_name = file_name or code
-
-    if code_data_raw is None:
-        code_data_raw = await get_stock_data_from_db(code, END_DATE)
-
-    code_data = code_data_raw
-
-    effective_date = START_DATE
-    if code_data and code_data[0]["date"] > START_DATE:
-        effective_date = code_data[0]["date"]
-
-    fieldnames = [
-        "code", "genome_id", "tradeday", "position_status", "next_open_action",
-        "E1", "E2", "E3", "E4", "E5",
-        "exit1", "close", "entry_price", "entry_date", "exit_price",
-    ]
-
-    csv_row = {
+    return {
         "code": code,
         "genome_id": genome_id,
         "tradeday": effective_date,
@@ -143,24 +135,21 @@ async def get_data_and_save_to_csv(code: str, trade_date: str, genome_id: str = 
         "exit1": 0, "close": 0, "entry_price": 0, "entry_date": 0, "exit_price": 0,
     }
 
-    try:
-        saved = await file_service.add_data_to_csv(
-            file_name=csv_file_name, data=[csv_row], fieldnames=fieldnames,
-        )
-        return csv_row if saved else None
-    except Exception as e:
-        print(f"Помилка при записі CSV: {e}")
-        return None
+
+def _store_trade_pairs_in_redis(optimization_id, stock_code, genome_id, trade_pairs):
+    """Store formatted trade pairs in Redis for the result worker to consume."""
+    import json
+    client = QueueService.get_redis_client()
+    key = f"trade_pairs:{optimization_id or 'single'}:{stock_code}:{genome_id}"
+    client.set(key, json.dumps(trade_pairs), ex=3600)  # TTL 1 hour
 
 
 @timed("signals_for_the_period")
 async def signals_for_the_period(code, trade_date, params: AlgorithmParameters = None, 
-                                  genome_id: str = "G_000", file_name: str = None,
+                                  genome_id: str = "G_000",
                                   code_data_raw=None, spy_data_raw=None,
-                                  initial_signal=None):
-    """Main signal calculation loop with optimized data handling."""
-    csv_file_name = file_name or code
-
+                                  initial_signal=None) -> List[Dict[str, Any]]:
+    """Main signal calculation loop. Returns signals batch in memory (no file I/O)."""
     if params is None:
         params = AlgorithmParameters()
     
@@ -207,10 +196,7 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
     if initial_signal is not None:
         latest_signal = initial_signal
     else:
-        latest_signal = await get_latest_signal(csv_file_name, genome_id=genome_id)
-        if latest_signal is None:
-            print(f"Немає сигналу для коду {code}, genome: {genome_id}")
-            latest_signal = await get_data_and_save_to_csv(code, trade_date, genome_id, file_name=csv_file_name)
+        raise ValueError(f"initial_signal is required for genome {genome_id} — no file fallback")
 
     _raw_td = str(latest_signal["tradeday"]).split("T")[0]
 
@@ -235,7 +221,7 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
             position_status = latest_signal["position_status"]
 
             if position_status == "F":
-                logger.info(f"Buy - {tradeday_str}")
+                # logger.info(f"Buy - {tradeday_str}")
                 buySignals = precomputed.run_all_buy_conditions_fast(code_end_idx)
                 buy = is_buy_fast(buySignals)
 
@@ -323,9 +309,8 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
                 results_batch.append(result)
 
     logger.info(f'Task completed for {code}, genome: {genome_id} | Total days: {total_days} | Results: {len(results_batch)}')
-            
-    if len(results_batch) > 0:
-        await append_to_signals_csv(results_batch, csv_file_name)
+
+    return results_batch
 
 
 def to_float_or_none(v):
@@ -341,88 +326,6 @@ def to_float_or_none(v):
         return float(s)
     except ValueError:
         return None
-
-
-async def append_to_signals_csv(
-    result_data: Union[Dict[str, Any], List[Dict[str, Any]]],
-    file_name,
-    file_service: "FileService" = None,
-) -> bool:
-    if file_service is None:
-        file_service = FileService()
-
-    fieldnames = [
-        "code","genome_id","tradeday","position_status","next_open_action",
-        "E1","E2","E3","E4","E5",
-        "exit1","close","entry_price","entry_date","exit_price",
-    ]
-
-    def _to_datestr(v):
-        try:
-            ts = pd.to_datetime(v)
-            return ts.strftime("%Y-%m-%d")
-        except Exception:
-            return v
-
-    def _normalize_row(r: Dict[str, Any]) -> Dict[str, Any]:
-        row = dict(r)
-        if "tradeday" in row and row["tradeday"] not in (None, ""):
-            row["tradeday"] = _to_datestr(row["tradeday"])
-        if "entry_date" in row and row["entry_date"] not in (None, 0, ""):
-            row["entry_date"] = _to_datestr(row["entry_date"])
-        for f in fieldnames:
-            row.setdefault(f, "")
-        return row
-
-    if isinstance(result_data, dict):
-        rows = [_normalize_row(result_data)]
-    else:
-        rows = [_normalize_row(r) for r in result_data]
-
-    return await file_service.add_data_to_csv(
-        file_name=file_name,
-        data=rows,
-        fieldnames=fieldnames,
-    )
-
-
-async def get_latest_signal(
-    code: str,
-    file_service: "FileService" = None,
-    genome_id: str = None,
-) -> Optional[Dict[str, Any]]:
-    file_name = code
-
-    if file_service is None:
-        file_service = FileService()
-
-    rows: List[Dict[str, Any]] = await file_service.read_data_from_csv(file_name)
-    if not rows:
-        print(f"Немає записів у файлі data/{file_name}.csv")
-        return None
-
-    filtered = [r for r in rows if r.get("code") == code]
-
-    if genome_id:
-        filtered = [r for r in filtered if r.get("genome_id") == genome_id]
-    
-    if not filtered:
-        print(f"Немає записів для коду {code}" + (f", genome: {genome_id}" if genome_id else ""))
-        return None
-
-    def _parse_dt(v) -> Optional[pd.Timestamp]:
-        try:
-            return pd.to_datetime(v)
-        except Exception:
-            return None
-
-    filtered = [r for r in filtered if _parse_dt(r.get("tradeday")) is not None]
-    if not filtered:
-        print(f"Немає валідних дат tradeday для коду {code}")
-        return None
-
-    latest = max(filtered, key=lambda r: _parse_dt(r.get("tradeday")))
-    return latest
 
 
 def _to_float_or_none(v):
@@ -449,17 +352,17 @@ def _to_date_str_or_none(v):
         return None
 
 
-async def format_signals_csv_inplace(
-    file_service: "FileService" = None,
-    file_name: str = "signals",
+def format_signals_in_memory(
+    rows_raw: List[Dict[str, Any]],
     genome_id: str = "G_000",
-) -> Optional[pd.DataFrame]:
-    if file_service is None:
-        file_service = FileService()
-
-    rows_raw: List[Dict[str, Any]] = await file_service.read_data_from_csv(file_name)
+) -> List[Dict[str, Any]]:
+    """
+    Format raw signal rows into trade-pair summaries, entirely in memory.
+    Returns list of dicts with keys: Genome ID, Buy Signal, Stop Signal,
+    Entry price, Exit price, Gain/Lose.
+    """
     if not rows_raw:
-        return None
+        return []
 
     df = pd.DataFrame(rows_raw)
 
@@ -567,12 +470,4 @@ async def format_signals_csv_inplace(
     for col in ["Entry price", "Exit price"]:
         out_df[col] = out_df[col].apply(_fmt_price)
 
-    file_path = f"{file_service.data_dir}/{file_name}.csv"
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(out_df.columns))
-        writer.writeheader()
-        for r in out_df.to_dict(orient="records"):
-            writer.writerow(r)
-
-    return out_df
+    return out_df.to_dict(orient="records")

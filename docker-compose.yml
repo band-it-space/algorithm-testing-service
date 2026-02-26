@@ -58,6 +58,10 @@ services:
       - LOG_DIR=/app/logs
       - OPTIMIZATION_START_DATE=${OPTIMIZATION_START_DATE:-2016-01-01}
       - OPTIMIZATION_END_DATE=${OPTIMIZATION_END_DATE:-2026-02-02}
+      - SMART_FILTERING_ENABLED=${SMART_FILTERING_ENABLED:-true}
+      - MIN_PAYOFF_RATIO=${MIN_PAYOFF_RATIO:-2}
+      - OUT_PAYOFF_RATIO=${OUT_PAYOFF_RATIO:-1}
+      - MIN_OBSERVATIONS=${MIN_OBSERVATIONS:-2}
     volumes:
       - ./app:/app/app
       - ./workers:/app/workers
@@ -87,6 +91,10 @@ services:
       - GOOGLE_SHEETS_CREDENTIALS_PATH=/app/credentials/google_sheets.json
       - OPTIMIZATION_START_DATE=${OPTIMIZATION_START_DATE:-2016-01-01}
       - OPTIMIZATION_END_DATE=${OPTIMIZATION_END_DATE:-2026-02-02}
+      - SMART_FILTERING_ENABLED=${SMART_FILTERING_ENABLED:-true}
+      - MIN_PAYOFF_RATIO=${MIN_PAYOFF_RATIO:-2}
+      - OUT_PAYOFF_RATIO=${OUT_PAYOFF_RATIO:-1}
+      - MIN_OBSERVATIONS=${MIN_OBSERVATIONS:-2}
     volumes:
       - ./app:/app/app
       - ./workers:/app/workers

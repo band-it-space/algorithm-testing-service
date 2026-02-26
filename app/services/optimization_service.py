@@ -42,15 +42,18 @@ class OptimizationMetadata:
     updated_at: str
     parameter_ranges: List[Dict[str, Any]]
     sheet_id: Optional[str] = None  # Google Sheet ID for output
+    variable_param_names: Optional[List[str]] = None
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "OptimizationMetadata":
-        # Handle missing sheet_id for backwards compatibility
+        # Handle missing optional fields for backwards compatibility
         if 'sheet_id' not in data:
             data['sheet_id'] = None
+        if 'variable_param_names' not in data:
+            data['variable_param_names'] = None
         return cls(**data)
 
 
@@ -67,14 +70,15 @@ class OptimizationService:
     
     @classmethod
     def _clear_results_file(cls) -> None:
-        """Clear the Automated Results.csv file for a fresh optimization run."""
-        results_path = os.path.join(DATA_DIR, AUTOMATED_RESULTS_FILE)
-        try:
-            if os.path.exists(results_path):
-                os.remove(results_path)
-                logger.info(f"Cleared previous results file: {results_path}")
-        except Exception as e:
-            logger.warning(f"Could not clear results file: {e}")
+        """Clear the results CSV files for a fresh optimization run."""
+        for filename in [AUTOMATED_RESULTS_FILE, "Automated Results Per Genome.csv"]:
+            results_path = os.path.join(DATA_DIR, filename)
+            try:
+                if os.path.exists(results_path):
+                    os.remove(results_path)
+                    logger.info(f"Cleared previous results file: {results_path}")
+            except Exception as e:
+                logger.warning(f"Could not clear results file {filename}: {e}")
     
     @classmethod
     def create_optimization(
@@ -96,6 +100,9 @@ class OptimizationService:
         base_params = AlgorithmParameters()
         genomes = generate_genomes(ranges, base_params)
         
+        # Extract variable param names (params with change=True)
+        variable_param_names = [r.name for r in ranges if r.change]
+        
         total_genomes = len(genomes)
         total_tasks = total_genomes * len(stock_codes)
         
@@ -112,6 +119,7 @@ class OptimizationService:
             updated_at=datetime.now().isoformat(),
             parameter_ranges=parameter_ranges,
             sheet_id=sheet_id,
+            variable_param_names=variable_param_names,
         )
         
         # Store metadata in Redis
@@ -121,6 +129,12 @@ class OptimizationService:
             json.dumps(metadata.to_dict())
         )
         client.rpush(cls.OPTIMIZATION_LIST_KEY, optimization_id)
+        
+        # Store genome-param mapping for smart filtering
+        from app.config.smart_filtering_config import SMART_FILTERING_ENABLED
+        if SMART_FILTERING_ENABLED:
+            from app.services.smart_filtering_service import SmartFilteringService
+            SmartFilteringService.store_genome_params(optimization_id, genomes, variable_param_names)
         
         logger.info(f"Created optimization {optimization_id}: {total_genomes} genomes × {len(stock_codes)} stocks = {total_tasks} tasks")
         
@@ -141,10 +155,12 @@ class OptimizationService:
         base_params = AlgorithmParameters()
         genomes = generate_genomes(ranges, base_params)
         
-        # Create tasks for each stock × genome combination
+        # Create tasks for each genome × stock combination
+        # Genome-first ordering ensures all stocks for a genome are queued
+        # together, so cross-stock averaging and smart filtering trigger early.
         tasks = []
-        for stock_code in metadata.stock_codes:
-            for genome in genomes:
+        for genome in genomes:
+            for stock_code in metadata.stock_codes:
                 tasks.append({
                     "stock": stock_code,
                     "genome_id": genome["genome_id"],
@@ -242,6 +258,7 @@ class OptimizationService:
         # If completed, write results to Google Sheets
         if metadata.status == OptimizationStatus.COMPLETED.value:
             cls._write_results_to_sheets(optimization_id, metadata)
+            cls._write_toxic_params_file(optimization_id)
 
         return metadata
     
@@ -298,6 +315,35 @@ class OptimizationService:
         
         client.hset(key, field, json.dumps(result))
         return True
+    
+    OPTIMIZATION_AVG_RESULTS_PREFIX = "optimization_avg_results:"
+    GENOME_DONE_PREFIX = "genome_done:"
+
+    @classmethod
+    def store_averaged_result(cls, optimization_id: str, genome_id: str, result: Dict[str, Any]) -> None:
+        """Store averaged result for a genome."""
+        client = cls.get_redis_client()
+        key = f"{cls.OPTIMIZATION_AVG_RESULTS_PREFIX}{optimization_id}"
+        client.hset(key, genome_id, json.dumps(result))
+
+    @classmethod
+    def get_averaged_results(cls, optimization_id: str) -> Dict[str, Dict[str, Any]]:
+        """Get all averaged results for an optimization."""
+        client = cls.get_redis_client()
+        key = f"{cls.OPTIMIZATION_AVG_RESULTS_PREFIX}{optimization_id}"
+        raw = client.hgetall(key)
+        results = {}
+        for field, value in raw.items():
+            field_str = field.decode() if isinstance(field, bytes) else field
+            results[field_str] = json.loads(value)
+        return results
+
+    @classmethod
+    def increment_genome_stock_done(cls, optimization_id: str, genome_id: str) -> int:
+        """Atomically increment per-genome stock counter. Returns new count."""
+        client = cls.get_redis_client()
+        key = f"{cls.GENOME_DONE_PREFIX}{optimization_id}"
+        return client.hincrby(key, genome_id, 1)
     
     @classmethod
     def get_optimization_results(cls, optimization_id: str) -> Dict[str, Dict[str, Any]]:
@@ -385,7 +431,7 @@ class OptimizationService:
     
     @classmethod
     def get_progress(cls, optimization_id: str) -> Optional[Dict[str, Any]]:
-        """Get optimization progress."""
+        """Get optimization progress with ETA calculation."""
         metadata = cls.get_optimization(optimization_id)
         if not metadata:
             return None
@@ -395,6 +441,32 @@ class OptimizationService:
             progress_percent = round(
                 (metadata.completed_tasks / metadata.total_tasks) * 100, 2
             )
+        
+        # ETA calculation
+        elapsed_seconds = 0.0
+        eta_seconds = None
+        eta_formatted = None
+        try:
+            from datetime import datetime
+            created_dt = datetime.fromisoformat(metadata.created_at)
+            now = datetime.now()
+            elapsed_seconds = round((now - created_dt).total_seconds(), 1)
+            
+            if metadata.completed_tasks > 0 and metadata.completed_tasks < metadata.total_tasks:
+                remaining_tasks = metadata.total_tasks - metadata.completed_tasks
+                avg_time_per_task = elapsed_seconds / metadata.completed_tasks
+                eta_seconds = round(remaining_tasks * avg_time_per_task, 1)
+                
+                mins, secs = divmod(int(eta_seconds), 60)
+                hours, mins = divmod(mins, 60)
+                if hours > 0:
+                    eta_formatted = f"{hours}h {mins}m {secs}s"
+                elif mins > 0:
+                    eta_formatted = f"{mins}m {secs}s"
+                else:
+                    eta_formatted = f"{secs}s"
+        except Exception:
+            pass
         
         return {
             "optimization_id": optimization_id,
@@ -407,7 +479,55 @@ class OptimizationService:
             "stock_codes": metadata.stock_codes,
             "created_at": metadata.created_at,
             "updated_at": metadata.updated_at,
+            "elapsed_seconds": elapsed_seconds,
+            "eta_seconds": eta_seconds,
+            "eta_formatted": eta_formatted,
+            "smart_filtering": cls._get_smart_filtering_progress(optimization_id),
         }
+    
+    @classmethod
+    def _write_toxic_params_file(cls, optimization_id: str) -> None:
+        """Write eliminated toxic parameters to a CSV file in /data."""
+        try:
+            from app.config.smart_filtering_config import SMART_FILTERING_ENABLED
+            if not SMART_FILTERING_ENABLED:
+                return
+            from app.services.smart_filtering_service import SmartFilteringService
+            summary = SmartFilteringService.get_filtering_summary(optimization_id)
+            eliminated = summary.get("eliminated_params", [])
+            if not eliminated:
+                logger.info(f"No toxic params to write for optimization {optimization_id}")
+                return
+
+            import csv
+            file_path = os.path.join("data", f"toxic_parameters_{optimization_id}.csv")
+            fieldnames = ["param", "value", "method", "observations", "after_genome"]
+            with open(file_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                for p in eliminated:
+                    writer.writerow({
+                        "param": p.get("param", ""),
+                        "value": p.get("value", ""),
+                        "method": p.get("method", ""),
+                        "observations": p.get("observations", ""),
+                        "after_genome": p.get("after_genome", ""),
+                    })
+            logger.info(f"Wrote {len(eliminated)} toxic params to {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to write toxic params file: {e}")
+
+    @staticmethod
+    def _get_smart_filtering_progress(optimization_id: str) -> Dict[str, Any]:
+        """Get smart filtering stats for progress API."""
+        from app.config.smart_filtering_config import SMART_FILTERING_ENABLED
+        if not SMART_FILTERING_ENABLED:
+            return {"enabled": False}
+        try:
+            from app.services.smart_filtering_service import SmartFilteringService
+            return SmartFilteringService.get_filtering_summary(optimization_id)
+        except Exception:
+            return {"enabled": True, "error": "unavailable"}
     
     @classmethod
     def list_optimizations(cls, limit: int = 50) -> List[Dict[str, Any]]:
@@ -436,25 +556,25 @@ class OptimizationService:
         
         try:
             from app.services.sheets_service import SheetsService
-            from app.services.results_aggregation_service import get_output_fieldnames
+            from app.services.results_aggregation_service import get_averaged_output_fieldnames
+            from app.config.smart_filtering_config import SMART_FILTERING_ENABLED
             
-            # Get all results from Redis (with recalculated deltas)
-            results = cls.get_optimization_results(optimization_id)
+            # Use averaged results instead of per-stock results
+            results = cls.get_averaged_results(optimization_id)
             
             if not results:
-                logger.warning(f"No results found for optimization {optimization_id}")
+                logger.warning(f"No averaged results for optimization {optimization_id}")
                 return False
             
-            # Ordered fieldnames matching Output Results Sample.csv
-            fieldnames = get_output_fieldnames()
+            variable_param_names = metadata.variable_param_names
+            fieldnames = get_averaged_output_fieldnames(variable_param_names)
             
             # Format results for output
             output_data = []
-            for key, result in results.items():
+            for genome_id, result in results.items():
                 if not isinstance(result, dict):
                     continue
                 
-                # Filter to only expected fields (remove optimization_id, etc.)
                 clean_row = {}
                 for field in fieldnames:
                     clean_row[field] = result.get(field, '')
@@ -466,7 +586,7 @@ class OptimizationService:
                 output_data.append(clean_row)
             
             if not output_data:
-                logger.warning(f"No formatted results for optimization {optimization_id}")
+                logger.warning(f"No formatted averaged results for optimization {optimization_id}")
                 return False
             
             # Sort by Genome ID
@@ -481,7 +601,18 @@ class OptimizationService:
             )
             
             if success:
-                logger.info(f"Successfully wrote {len(output_data)} results to Google Sheets for optimization {optimization_id}")
+                logger.info(f"Wrote {len(output_data)} averaged results to Sheets for {optimization_id}")
+                
+                # Log smart filtering summary
+                if SMART_FILTERING_ENABLED:
+                    from app.services.smart_filtering_service import SmartFilteringService
+                    summary = SmartFilteringService.get_filtering_summary(optimization_id)
+                    if summary.get("eliminated_params"):
+                        logger.info(
+                            f"SMART FILTER SUMMARY for {optimization_id}: "
+                            f"Skipped {summary['genomes_skipped']} genomes, "
+                            f"Eliminated: {summary['eliminated_params']}"
+                        )
             else:
                 logger.error(f"Failed to write results to Google Sheets for optimization {optimization_id}")
             

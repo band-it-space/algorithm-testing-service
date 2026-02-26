@@ -144,8 +144,12 @@ class AlgorithmParameters:
         filtered_data = {k: v for k, v in data.items() if k in known_fields}
         return cls(**filtered_data)
     
-    def get_variable_params_for_output(self) -> Dict[str, Any]:
+    def get_variable_params_for_output(self, variable_param_names: Optional[List[str]] = None) -> Dict[str, Any]:
         """Get subset of parameters typically varied in optimization."""
+        if variable_param_names:
+            params_dict = self.to_dict()
+            return {name: params_dict[name] for name in variable_param_names if name in params_dict}
+        # Fallback to hardcoded defaults for backward compatibility
         return {
             "input_B1_upper_range": self.input_B1_upper_range,
             "input_B3_LR_lookback": self.input_B3_LR_lookback,

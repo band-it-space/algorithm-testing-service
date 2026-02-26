@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import logging
 from fastapi import APIRouter, HTTPException
@@ -9,6 +10,12 @@ logger = logging.getLogger(__name__)
 INPUT_FILE = "general_results"
 OUTPUT_FILE = "summary"
 
+EXPECTED_COLUMNS = [
+    "symbol", "genome_id", "entryDay", "entryPrice",
+    "exitDay", "exitPrice", "profit", "Profit %", "Invested"
+]
+
+
 @generate_summary_file.get("/")
 async def generate_summary():
     """
@@ -16,19 +23,30 @@ async def generate_summary():
     calculates statistics on CLOSED trades only, and saves summary.csv.
     """
     file_service = FileService()
-    
-    raw_data = await file_service.read_data_from_csv(INPUT_FILE)
+    filepath = file_service._get_filepath(INPUT_FILE)
 
-    if not raw_data:
+    if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail=f"File {INPUT_FILE}.csv not found or empty. Run tests first.")
 
     try:
-        df = pd.DataFrame(raw_data)
-        
-        if 'profit' in df.columns:
-            df['profit'] = pd.to_numeric(df['profit'], errors='coerce').fillna(0.0)
-        else:
-            df['profit'] = 0.0
+        df = pd.read_csv(filepath)
+
+        # If expected columns are missing, the file likely has no header row
+        if 'exitDay' not in df.columns or 'profit' not in df.columns:
+            # Determine column names based on number of columns
+            peek = pd.read_csv(filepath, header=None, nrows=1)
+            n_cols = peek.shape[1]
+            if n_cols == len(EXPECTED_COLUMNS):
+                col_names = EXPECTED_COLUMNS
+            else:
+                # Fallback for files without genome_id column
+                col_names = [c for c in EXPECTED_COLUMNS if c != "genome_id"][:n_cols]
+            df = pd.read_csv(filepath, header=None, names=col_names)
+
+        if df.empty:
+            raise HTTPException(status_code=404, detail=f"File {INPUT_FILE}.csv is empty. Run tests first.")
+
+        df['profit'] = pd.to_numeric(df['profit'], errors='coerce').fillna(0.0)
 
         if 'exitDay' not in df.columns:
             df['exitDay'] = ""
@@ -74,7 +92,7 @@ async def generate_summary():
             {"Metric": "Ratio Avg Win / Avg Loss", "Value": f"{ratio:.2f}"}
         ]
 
-        await file_service.clear_file_content(OUTPUT_FILE)
+        await file_service.clear_csv(OUTPUT_FILE)
         
         fieldnames = ["Metric", "Value"]
         await file_service.add_data_to_csv(OUTPUT_FILE, summary_data, fieldnames)

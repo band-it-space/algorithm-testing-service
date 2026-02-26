@@ -55,6 +55,14 @@ class OptimizationResponse(BaseModel):
     message: str
 
 
+class SmartFilteringProgress(BaseModel):
+    """Smart filtering progress info."""
+    enabled: bool = False
+    genomes_skipped: int = 0
+    eliminated_params: List[Dict[str, Any]] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
 class OptimizationProgressResponse(BaseModel):
     """Response model for optimization progress."""
     optimization_id: str
@@ -67,6 +75,10 @@ class OptimizationProgressResponse(BaseModel):
     stock_codes: List[str]
     created_at: str
     updated_at: str
+    elapsed_seconds: float = 0.0
+    eta_seconds: Optional[float] = None
+    eta_formatted: Optional[str] = None
+    smart_filtering: Optional[SmartFilteringProgress] = None
 
 
 class GenomeCombinationsResponse(BaseModel):

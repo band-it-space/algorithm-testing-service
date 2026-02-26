@@ -724,7 +724,7 @@ def runAllSellConditions(ohlcv, spy_data, buy_date, buy_price, stop_loss, trade_
     if params is None:
         params = AlgorithmParameters()
 
-    logger.info(f"Sell - {trade_date}")
+    # logger.info(f"Sell - {trade_date}")
     
     # Safety: verify data is sorted (O(1) check)
     if len(ohlcv) >= 2:

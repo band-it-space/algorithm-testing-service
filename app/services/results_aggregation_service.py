@@ -254,3 +254,121 @@ def get_output_fieldnames() -> List[str]:
     ]
     
     return base_fields + param_fields
+
+
+def get_per_genome_output_fieldnames() -> List[str]:
+    """Fieldnames for 'Automated Results Per Genome.csv' — per-stock, no param columns."""
+    return [
+        "Genome ID",
+        "Stock Code",
+        "Trade Count",
+        "Profit Delta (%)",
+        "Win Rate Delta (%)",
+        "Total Win ($)",
+        "Total Loss ($)",
+        "Trades Win",
+        "Trades Loss",
+        "Avg Win ($)",
+        "Avg Loss ($)",
+        "Payoff Ratio",
+    ]
+
+
+def get_averaged_output_fieldnames(variable_param_names: Optional[List[str]] = None) -> List[str]:
+    """Fieldnames for 'Automated Results.csv' — averaged across stocks, with param columns."""
+    base_fields = [
+        "Genome ID",
+        "Trade Count",
+        "Profit Delta (%)",
+        "Win Rate Delta (%)",
+        "Total Win ($)",
+        "Total Loss ($)",
+        "Trades Win",
+        "Trades Loss",
+        "Avg Win ($)",
+        "Avg Loss ($)",
+        "Payoff Ratio",
+    ]
+    if variable_param_names:
+        return base_fields + variable_param_names
+    # Fallback to hardcoded defaults
+    return base_fields + [
+        "input_B1_upper_range",
+        "input_B3_LR_lookback",
+        "input_B11_atr_threshold",
+        "input_B18_bbw_ratio",
+        "input_S1_atr_mult",
+        "input_S5_push_up_atr",
+    ]
+
+
+def compute_averaged_metrics(
+    per_stock_results: List[Dict[str, Any]],
+    genome_id: str,
+    parameters: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Average per-stock result dicts into one averaged result dict.
+    
+    Method: mean of raw totals, then derive ratios.
+    """
+    n = len(per_stock_results)
+    if n == 0:
+        return {}
+
+    avg_trade_count = sum(float(r.get("Trade Count", 0)) for r in per_stock_results) / n
+    avg_total_win = sum(float(r.get("Total Win ($)", 0)) for r in per_stock_results) / n
+    avg_total_loss = sum(float(r.get("Total Loss ($)", 0)) for r in per_stock_results) / n
+    avg_trades_win = sum(float(r.get("Trades Win", 0)) for r in per_stock_results) / n
+    avg_trades_loss = sum(float(r.get("Trades Loss", 0)) for r in per_stock_results) / n
+
+    avg_win = avg_total_win / avg_trades_win if avg_trades_win > 0 else 0.0
+    avg_loss = avg_total_loss / avg_trades_loss if avg_trades_loss > 0 else 0.0
+    payoff_ratio = avg_win / avg_loss if avg_loss > 0 else 0.0
+
+    row = {
+        "Genome ID": genome_id,
+        "Trade Count": round(avg_trade_count, 2),
+        "Profit Delta (%)": 0,
+        "Win Rate Delta (%)": 0,
+        "Total Win ($)": round(avg_total_win, 2),
+        "Total Loss ($)": round(avg_total_loss, 2),
+        "Trades Win": round(avg_trades_win, 2),
+        "Trades Loss": round(avg_trades_loss, 2),
+        "Avg Win ($)": round(avg_win, 2),
+        "Avg Loss ($)": round(avg_loss, 2),
+        "Payoff Ratio": round(payoff_ratio, 2),
+    }
+
+    # Add parameter values
+    for key, value in parameters.items():
+        row[key] = value
+
+    return row
+
+
+def calculate_averaged_deltas(result: Dict[str, Any], base: Dict[str, Any]) -> Dict[str, Any]:
+    """Calculate Profit Delta and Win Rate Delta vs averaged BASE."""
+    base_profit = float(base.get("Total Win ($)", 0)) - float(base.get("Total Loss ($)", 0))
+    genome_profit = float(result.get("Total Win ($)", 0)) - float(result.get("Total Loss ($)", 0))
+
+    if result.get("Genome ID") == "G_000":
+        result["Profit Delta (%)"] = 0.0
+        result["Win Rate Delta (%)"] = 0.0
+        return result
+
+    if base_profit != 0:
+        result["Profit Delta (%)"] = round(((genome_profit - base_profit) / abs(base_profit)) * 100, 2)
+    else:
+        result["Profit Delta (%)"] = 0.0
+
+    base_trades_win = float(base.get("Trades Win", 0))
+    base_trade_count = float(base.get("Trade Count", 0))
+    genome_trades_win = float(result.get("Trades Win", 0))
+    genome_trade_count = float(result.get("Trade Count", 0))
+
+    base_win_rate = (base_trades_win / base_trade_count * 100) if base_trade_count > 0 else 0.0
+    genome_win_rate = (genome_trades_win / genome_trade_count * 100) if genome_trade_count > 0 else 0.0
+
+    result["Win Rate Delta (%)"] = round(genome_win_rate - base_win_rate, 2)
+    return result
