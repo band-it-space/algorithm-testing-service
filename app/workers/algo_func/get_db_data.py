@@ -1,3 +1,4 @@
+import logging
 import os
 from dotenv import load_dotenv
 
@@ -5,6 +6,8 @@ import requests
 from datetime import datetime
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # API configuration
 API_KEY = os.getenv('API_KEY')
@@ -24,7 +27,7 @@ async def get_stock_data_from_db(code: str, end_date: str | None = None):
         response.raise_for_status()
         stock_data_api = response.json()
     except requests.RequestException as e:
-        print(f"❌ Error fetching data from API: {e}")
+        logger.error(f"Error fetching data from API: {e}")
         return []
     
     stock_records = []
@@ -60,7 +63,7 @@ async def get_stock_data_from_db(code: str, end_date: str | None = None):
     
     empty_records = [rec for rec in stock_records if rec["open"] == 0]
     if empty_records:
-        print("⚠️ Empty records found at dates:", ", ".join(rec["date"] for rec in empty_records))
+        logger.warning(f"Empty records found at dates: {', '.join(rec['date'] for rec in empty_records)}")
     
     stock_records = [rec for rec in stock_records if rec not in empty_records]
         
@@ -78,7 +81,7 @@ async def us_api_stocks_data(code: str, end_date: str | None = None, verify_type
         response.raise_for_status()
         stock_data_api = response.json()
     except requests.RequestException as e:
-        print(f"❌ Error fetching data from API: {e}")
+        logger.error(f"Error fetching data from API: {e}")
         return []
     
     stock_records = []
@@ -115,7 +118,7 @@ async def us_api_stocks_data(code: str, end_date: str | None = None, verify_type
     
         empty_records = [rec for rec in stock_records if rec["open"] == 0]
         if empty_records:
-            print("⚠️ Empty records found at dates:", ", ".join(rec["date"] for rec in empty_records))
+            logger.warning(f"Empty records found at dates: {', '.join(rec['date'] for rec in empty_records)}")
     
         stock_records = [rec for rec in stock_records if rec not in empty_records]
     else:

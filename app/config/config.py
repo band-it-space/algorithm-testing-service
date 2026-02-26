@@ -13,8 +13,8 @@ GENERAL_RESULTS_FILE = "general_results"
 
 
 # --- US King Algo ---
-US_KING_START_DAY="2019-01-01"
-US_KING_END_DAY="2026-01-01"
+US_KING_START_DAY="2008-05-01"
+US_KING_END_DAY="2020-11-01"
 
 US_KING_STOCKS_FILE = "us_king_screener"
 BENCHMARK_US_KING = "SPY"
@@ -22,4 +22,3 @@ BENCHMARK_US_KING = "SPY"
 INVESTED_AMOUNT = 10000
 RESULTS_FILE_NAME = "us_king_results"
 PROFIT_FILE_NAME = "us_king_profit_records"
-

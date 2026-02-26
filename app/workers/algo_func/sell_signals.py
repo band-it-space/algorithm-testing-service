@@ -138,7 +138,7 @@ def ema(values, period):
     if len(values) < period:
         return []
     k = 1 / period
-    ema_vals = [sum(values[:period]) / period]  # стартуємо з SMA
+    ema_vals = [sum(values[:period]) / period]  # start with SMA
     for v in values[period:]:
         ema_vals.append(ema_vals[-1] + k * (v - ema_vals[-1]))
     return ema_vals
@@ -152,27 +152,27 @@ def fibo_exit_stop(
     yy_days: int
 ) -> bool:
     """
-    Універсальна Fibo-умова виходу за аналогією з MultiCharts:
+    Universal Fibonacci exit condition analogous to MultiCharts logic:
 
         if barssinceentry(0) > xx_days then
             if countif( (highest(high,250)-close)/(highest(high,250)-lowest(low,250)) > level,
                        yy_days ) = yy_days
                 then EXIT
 
-    Параметри:
-        xx_days – через скільки днів після входу умова взагалі починає працювати
-        level   – поріг у виразі (H - C)/(H - L) > level (0.382, 0.236, ...)
-        yy_days – скільки останніх днів поспіль ця умова має бути виконана
+    Args:
+        xx_days: Number of days after entry before the condition starts to apply.
+        level: Threshold in the expression (H - C)/(H - L) > level (e.g. 0.382, 0.236).
+        yy_days: Number of consecutive trailing days the condition must hold.
     """
 
-    # Сортуємо по даті
+    # Sort by date
     data = sorted(ohlcv, key=lambda x: to_ts(x.date))
     n = len(data)
 
     if n < 250:
         raise ValueError("Insufficient history: need at least 250 days for 250D High/Low.")
 
-    # Знаходимо індекс входу
+    # Find entry index
     bts = to_ts(buy_date)
     buy_idx = -1
     for i, d in enumerate(data):
@@ -190,15 +190,15 @@ def fibo_exit_stop(
         raise ValueError("Buy date is outside data range.")
 
     last_idx = n - 1
-    bars_since_entry = last_idx - buy_idx  # аналог barssinceentry(0)
+    bars_since_entry = last_idx - buy_idx  # analogue of barssinceentry(0)
 
     # MultiCharts: barssinceentry(0) > xx_days
     if bars_since_entry <= xx_days:
         return False
 
-    # Перевірка умови (H - C)/(H - L) > level для конкретного дня i
+    # Check condition (H - C)/(H - L) > level for specific day i
     def below_fibo_level(i: int) -> bool:
-        # потрібні хоча б 250 барів до i включно
+        # need at least 250 bars up to i inclusive
         if i < 249:
             return False
 
@@ -221,7 +221,7 @@ def fibo_exit_stop(
         ratio = (high250 - close_i) / (high250 - low250)
         return ratio > level
 
-    # Аналог countif(cond, yy_days) = yy_days для ОСТАННІХ yy_days барів
+    # Count if condition holds for the last yy_days bars (MultiCharts countif equivalent)
     true_count = 0
     for offset in range(yy_days):
         i = last_idx - offset
@@ -704,7 +704,7 @@ def s17(ohlcv, buy_date, buy_price):
         return False
 
 
-def runAllSellConditions(ohlcv, spy_data, buy_date, buy_price, stop_loss, trade_date):
+def run_all_sell_conditions(ohlcv, spy_data, buy_date, buy_price, stop_loss, trade_date):
     s5_exit, new_stop = s5(ohlcv, buy_date, buy_price, stop_loss, trade_date)
 
     conditions = {
@@ -728,7 +728,7 @@ def runAllSellConditions(ohlcv, spy_data, buy_date, buy_price, stop_loss, trade_
     return {"conditions": conditions, "stop_loss": new_stop}
 
 
-def isSell(signals):
+def is_sell(signals):
     return (
         signals["S1"]
         or signals["S4"]
@@ -764,10 +764,10 @@ def num(value, name):
 #         return []
 
 #     atr = [None] * len(trs)
-#     # перше значення – це проста середня TR за весь період
+#     # first value is the simple average of TR over the full period
 #     atr[period - 1] = sum(trs[:period]) / period
 
-#     # далі йде рекурсивна формула Вайлдера
+#     # then apply Wilder's recursive formula
 #     for i in range(period, len(trs)):
 #         atr[i] = (atr[i - 1] * (period - 1) + trs[i]) / period
 

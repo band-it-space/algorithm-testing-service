@@ -2,11 +2,6 @@
 
 ⚠️ **MANDATORY:** Before any task, read [`/AGENTS.md`](/AGENTS.md) for technical guidelines, commands, and rules.
 
-## Scoped Instructions
-
-- **Backend:** [`.github/instructions/backend.instructions.md`](.github/instructions/backend.instructions.md)
-- **Frontend:** [`.github/instructions/frontend.instructions.md`](.github/instructions/frontend.instructions.md)
-
 ## Communication
 
 - Be concise, professional, and outcome-oriented.

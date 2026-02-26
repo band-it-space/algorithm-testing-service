@@ -4,9 +4,9 @@ import logging
 from app.workers.algo_func.helpers import sma, lewis_atr
 from app.workers.algo_func.buy_signals import ( 
     bollinger_bands,
-    checkB12, 
-    checkB10, 
-    checkB13,
+    check_b12, 
+    check_b10, 
+    check_b13,
     wilder_atr
 )
 from app.workers.algo_func.types import OHLCV
@@ -14,7 +14,7 @@ from app.workers.algo_func.types import OHLCV
 logger = logging.getLogger(__name__)
 
 #TODO B1
-def checkB1_US(
+def check_b1_us(
     stock_prices: List[OHLCV],
     bb_period: int = 22,
     bb_std_dev: float = 0.89,
@@ -81,7 +81,7 @@ def checkB1_US(
     return condBB and condCloseInUpperRange
 
 #TODO B8
-def checkB8_US(
+def check_b8_us(
     stock_prices: List[OHLCV],
     recent_period: int = 85,
     lookback_period: int = 150
@@ -145,7 +145,7 @@ def checkB8_US(
     return result
 
 #TODO B9
-def checkB9_US(
+def check_b9_us(
     stock_prices: List[OHLCV],
     lookback_period: int = 105
 ) -> bool:
@@ -222,14 +222,14 @@ def checkB9_US(
 # Documentation: "if 250D low happens within {68} days before breakout, cancel buy"
 # MC Code: lowestbar(low, 250) < input_XXXD_low_day (where input_XXXD_low_day = 68)
 # 
-# Use checkB10() from buy_signals.py with default parameters:
+# Use check_b10() from buy_signals.py with default parameters:
 # - lookback_period = 250
 # - recent_period = 68
 # 
-# No need for separate checkB10_US() - parameters are identical
+# No need for separate check_b10_US() - parameters are identical
 
 #TODO B11
-def checkB11_US(
+def check_b11_us(
     stock_prices: List[OHLCV],
     lookback_period: int = 215,
     threshold_percent: float = 0.67
@@ -315,26 +315,26 @@ def checkB11_US(
 # Documentation: "If 150D SMA has risen {16%} in the past {50} days AND Today high is deviating from 150DMA by 20%, THEN CANCEL Buy"
 # MC Code: if average(close,150)/average(close,150)[50]-1 > 16/100 and high/average(close, 150)-1 > 20/100 then cond18_B12 = false
 # 
-# Use checkB12() from buy_signals.py with default parameters:
+# Use check_b12() from buy_signals.py with default parameters:
 # - input_B12_growth = 0.16 (16%)
 # - input_B12_days = 50
 # - input_B12_deviation = 0.2 (20%)
 # - input_B12_sma_period = 150
 # 
-# No need for separate checkB12_US() - parameters are identical
+# No need for separate check_b12_US() - parameters are identical
 
 #TODO B13
 # Documentation: "CANCEL buy if the stock is underperforming SPY for {19}-Day AND {100}-Day look back periods."
 # MC Code: if close/close[input_B13_XX] < close data(2)/close[input_B13_XX] data(2) and
 #             close/close[input_B13_YY] < close data(2)/close[input_B13_YY] data(2) then cond19_B13 = false
 # 
-# Use checkB13() from buy_signals.py with US King parameters:
+# Use check_b13() from buy_signals.py with US King parameters:
 # - input_B13_XX = 19 (same as HK)
 # - input_B13_YY = 100 (different from HK's 60)
 # - Index data = SPY (for US), HSI (for HK)
 # 
 # Usage:
-#   checkB13(stock_ohlcv, spy_ohlcv, input_B13_XX=19, input_B13_YY=100)
+#   check_b13(stock_ohlcv, spy_ohlcv, input_B13_XX=19, input_B13_YY=100)
 # 
 # Note: Default parameters are for HK (19, 60), so MUST specify input_B13_YY=100 for US King
 
@@ -378,7 +378,7 @@ def linear_regression_slope(values: List[float], length: int) -> float:
     return numerator / denominator
 
 #TODO B18
-def checkB18_US(
+def check_b18_us(
     stock_prices: List[OHLCV],
     high_price_period: int = 252,
     near_high_threshold: float = 0.6,
@@ -538,7 +538,7 @@ def checkB18_US(
     return True
 
 #TODO B20
-def checkB20_US(
+def check_b20_us(
     stock_prices: List[OHLCV],
     volume_period: int = 20,
     highvol_period: int = 20
@@ -662,7 +662,7 @@ def checkB20_US(
     return result and highvol
 
 #TODO B21
-def checkB21_US(
+def check_b21_us(
     stock_prices: List[OHLCV],
     r3_period: int = 60,          # 3M approximation
     r1_period: int = 20,          # 1M approximation
@@ -752,7 +752,7 @@ def checkB21_US(
     return result
 
 #TODO B22
-def checkB22_US(
+def check_b22_us(
     stock_prices: List[OHLCV],
     lookback_period: int = 41,
     atr_multiplier: float = 2.45
@@ -889,7 +889,7 @@ def checkB22_US(
     return result
 
 
-def calcS1Stop_US(
+def calc_s1_stop_us(
     stock_prices: List[OHLCV], 
     factor: float = 3.4,
     atr_period: int = 22, 
@@ -968,7 +968,7 @@ def calcS1Stop_US(
     return round(base_stop, 3)
 
 
-def runAllBuyConditions_US(
+def run_all_buy_conditions_us(
     stock_prices: List[OHLCV], 
     spy_prices: List[OHLCV],
     targetDate: str
@@ -1004,22 +1004,22 @@ def runAllBuyConditions_US(
     """
     
     return {
-        'B1':  checkB1_US(stock_prices),
-        'B8':  checkB8_US(stock_prices),
-        'B9':  checkB9_US(stock_prices),
-        'B10': checkB10(stock_prices),  # Shared with HK
-        'B11': checkB11_US(stock_prices),
-        'B12': checkB12(stock_prices),  # Shared with HK
-        'B13': checkB13(stock_prices, spy_prices, input_B13_XX=19, input_B13_YY=100),  # US params with 0.75% tolerance
-        'B18': checkB18_US(stock_prices),
-        'B20': checkB20_US(stock_prices),
-        'B21': checkB21_US(stock_prices),
-        'B22': checkB22_US(stock_prices),
-        'stop_loss': calcS1Stop_US(stock_prices)  # US King specific
+        'B1':  check_b1_us(stock_prices),
+        'B8':  check_b8_us(stock_prices),
+        'B9':  check_b9_us(stock_prices),
+        'B10': check_b10(stock_prices),  # Shared with HK
+        'B11': check_b11_us(stock_prices),
+        'B12': check_b12(stock_prices),  # Shared with HK
+        'B13': check_b13(stock_prices, spy_prices, input_B13_XX=19, input_B13_YY=100),  # US params with 0.75% tolerance
+        'B18': check_b18_us(stock_prices),
+        'B20': check_b20_us(stock_prices),
+        'B21': check_b21_us(stock_prices),
+        'B22': check_b22_us(stock_prices),
+        'stop_loss': calc_s1_stop_us(stock_prices)  # US King specific
     }
 
 
-def isBuy_US(signals: Dict[str, Union[bool, float]]) -> bool:
+def is_buy_us(signals: Dict[str, Union[bool, float]]) -> bool:
     """
     Determine if US King buy signal is triggered based on all conditions.
     
@@ -1042,7 +1042,7 @@ def isBuy_US(signals: Dict[str, Union[bool, float]]) -> bool:
       * B22: Valid hard stop can be set
     
     Args:
-        signals: Dictionary from runAllBuyConditions_US()
+        signals: Dictionary from run_all_buy_conditions_us()
     
     Returns:
         True if buy signal triggered, False otherwise

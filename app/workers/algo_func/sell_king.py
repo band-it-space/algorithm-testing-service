@@ -12,13 +12,13 @@ from app.workers.algo_func.sell_signals import s10, s11, s12, s15, s16, s17
 logger = logging.getLogger(__name__)
 
 #TODO S1
-def checkS1_US(stock_prices: List[OHLCV], stop_loss: float) -> bool:
+def check_s1_us(stock_prices: List[OHLCV], stop_loss: float) -> bool:
     """
     S1 for US King Algorithm - Stop Loss Exit
     
     Exit if current close price falls below the stop loss level.
     
-    The stop_loss is calculated at entry using calcS1Stop_US():
+    The stop_loss is calculated at entry using calc_s1_stop_us():
     - Base stop = entry_close - 3.4 * ATR(22)
     - If risk > 20%, use fixed 7.2% stop instead
     
@@ -56,7 +56,7 @@ def checkS1_US(stock_prices: List[OHLCV], stop_loss: float) -> bool:
     return close < stop_loss
 
 #TODO S4
-def checkS4_US(
+def check_s4_us(
     stock_prices: List[OHLCV],
     entry_index: int,
     min_holding_period: int = 50,
@@ -174,7 +174,7 @@ def checkS4_US(
     return result
 
 #TODO S5
-def checkS5_US(
+def check_s5_us(
     stock_prices: List[OHLCV],
     entry_index: int,
     buy_price: float,
@@ -322,7 +322,7 @@ def checkS5_US(
     return exit_signal, round(new_stop, 3)
 
 #TODO S6
-def checkS6_US(
+def check_s6_us(
     stock_prices: List[OHLCV],
     entry_index: int,
     activation_day: int = 50,
@@ -401,7 +401,7 @@ def checkS6_US(
     return exit_signal
 
 #TODO S7
-def checkS7_US(
+def check_s7_us(
     stock_prices: List[OHLCV],
     entry_index: int,
     activation_day: int = 0,
@@ -511,7 +511,7 @@ def checkS7_US(
     return exit_signal
 
 #TODO S8
-def checkS8_US(
+def check_s8_us(
     stock_prices: List[OHLCV],
     entry_index: int,
     lookback_period: int = 126,
@@ -644,7 +644,7 @@ def checkS8_US(
     return False
 
 #TODO S9
-def checkS9_US(
+def check_s9_us(
     energy_signals: List[Dict[str, Any]],
     current_day_idx: int,
     energy_threshold: float = 0.22,
@@ -724,7 +724,7 @@ def checkS9_US(
     return exit_signal
 
 #TODO S13
-def checkS13_US(
+def check_s13_us(
     stock_prices: List[OHLCV],
     entry_index: int,
     activation_day: int = 238,
@@ -801,7 +801,7 @@ def checkS13_US(
     return exit_signal
 
 #TODO S14
-def checkS14_US(
+def check_s14_us(
     stock_prices: List[OHLCV],
     spy_prices: List[OHLCV],
     entry_index: int,
@@ -905,7 +905,7 @@ def checkS14_US(
     return underperforms_all
 
 #TODO S18
-def checkS18_US(
+def check_s18_us(
     stock_prices: List[OHLCV],
     entry_index: int,
     activation_period: int = 20,
@@ -994,7 +994,7 @@ def checkS18_US(
     return exit_signal
 
 #TODO S19
-def checkS19_US(
+def check_s19_us(
     stock_prices: List[OHLCV],
     entry_index: int,
     buy_price: float,
@@ -1163,7 +1163,7 @@ def checkS19_US(
     return exit_signal
 
 #TODO S20
-def checkS20_US(
+def check_s20_us(
     stock_prices: List[OHLCV],
     entry_index: int,
     drop_factor: float = 5.4,
@@ -1278,7 +1278,7 @@ def checkS20_US(
     
     return exit_signal
 
-def runAllSellConditions_US(
+def run_all_sell_conditions_us(
     stock_prices: List[OHLCV],
     spy_data: List[OHLCV],
     entry_index: int,
@@ -1310,35 +1310,35 @@ def runAllSellConditions_US(
         - exit1: max(s1_stop, s5_stop) - the active stop
     """
     # S5 returns both exit signal and new stop loss
-    s5_exit, new_s5_stop = checkS5_US(stock_prices, entry_index, buy_price, s5_stop_loss)
+    s5_exit, new_s5_stop = check_s5_us(stock_prices, entry_index, buy_price, s5_stop_loss)
     
     # S9 check
     s9_exit = False
     if energy_signals is not None and current_day_idx is not None:
-        s9_exit = checkS9_US(energy_signals, current_day_idx)
+        s9_exit = check_s9_us(energy_signals, current_day_idx)
     
     # Get buy_date from entry_index for signals that need it
     buy_date = stock_prices[entry_index].date
     
     conditions = {
-        "S1": checkS1_US(stock_prices, s1_stop_loss),
-        "S4": checkS4_US(stock_prices, entry_index),
+        "S1": check_s1_us(stock_prices, s1_stop_loss),
+        "S4": check_s4_us(stock_prices, entry_index),
         "S5": s5_exit,
-        "S6": checkS6_US(stock_prices, entry_index),
-        "S7": checkS7_US(stock_prices, entry_index),
-        "S8": checkS8_US(stock_prices, entry_index),
+        "S6": check_s6_us(stock_prices, entry_index),
+        "S7": check_s7_us(stock_prices, entry_index),
+        "S8": check_s8_us(stock_prices, entry_index),
         "S9": s9_exit,
         "S10": s10(stock_prices, buy_date, buy_price),
         "S11": s11(stock_prices, buy_date, buy_price),
         "S12": s12(stock_prices, buy_date, buy_price),
-        "S13": checkS13_US(stock_prices, entry_index),
-        "S14": checkS14_US(stock_prices, spy_data, entry_index),
+        "S13": check_s13_us(stock_prices, entry_index),
+        "S14": check_s14_us(stock_prices, spy_data, entry_index),
         "S15": s15(stock_prices, buy_date, buy_price),
         "S16": s16(stock_prices, buy_date, s16_xx=14.0),
         "S17": s17(stock_prices, buy_date, buy_price),
-        "S18": checkS18_US(stock_prices, entry_index),
-        "S19": checkS19_US(stock_prices, entry_index, buy_price),
-        "S20": checkS20_US(stock_prices, entry_index),
+        "S18": check_s18_us(stock_prices, entry_index),
+        "S19": check_s19_us(stock_prices, entry_index, buy_price),
+        "S20": check_s20_us(stock_prices, entry_index),
     }
     
     # Calculate exit1 as max of all stops (MultiCharts logic)
@@ -1351,7 +1351,7 @@ def runAllSellConditions_US(
         "exit1": exit1
     }
 
-def isSell_US(signals: dict) -> bool:
+def is_sell_us(signals: dict) -> bool:
     """
     Check if any sell signal is triggered for US King.
     

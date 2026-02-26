@@ -8,10 +8,10 @@ from app.config.config import HT_START_DAY, HT_END_DAY, BENCHMARK_HK
 from app.services.queue_service import QueueService
 from app.workers.algo_func.get_db_data import get_stock_data_from_db
 from app.services.file_service import FileService
-from app.workers.algo_func.buy_signals import runAllBuyConditions, isBuy
+from app.workers.algo_func.buy_signals import run_all_buy_conditions, is_buy
 from app.workers.algo_func.types import OHLCV
 from typing import Optional, Dict, Any, List, Union
-from app.workers.algo_func.sell_signals import runAllSellConditions, isSell
+from app.workers.algo_func.sell_signals import run_all_sell_conditions, is_sell
 from app.workers.algo_func.get_code_energy import calculate_energy_indicators_last_16_days
 
 
@@ -111,7 +111,7 @@ async def get_data_and_save_to_csv(code: str, trade_date: str, file_service: "Fi
         return None
 
 async def signals_for_the_period(code, trade_date):
-    print("start")
+    logger.info("Starting algorithm worker task")
     spy_data_raw = await get_stock_data_from_db(BENCHMARK_HK, trade_date)
     code_data_raw = await get_stock_data_from_db(code, trade_date)
     logger.info(f'Code_data_raw length-{len(code_data_raw)}')
@@ -144,7 +144,7 @@ async def signals_for_the_period(code, trade_date):
     latest_signal = await get_latest_signal(code)
 
     if latest_signal is None:
-        print(f"Немає сигналу для коду {code}")
+        logger.warning(f"No signal for code {code}")
         latest_signal = await get_data_and_save_to_csv(code, trade_date)
 
     latest_date = pd.to_datetime(latest_signal["tradeday"]).tz_localize(None)
@@ -155,12 +155,9 @@ async def signals_for_the_period(code, trade_date):
         if bar_date > latest_date:
             filtered_code_data.append(bar)
 
-    # print(len(filtered_code_data))
-    
     results_batch: List[Dict[str, Any]] = []
 
     for bar in filtered_code_data:
-        # print(bar)
         tradeday = pd.to_datetime(bar.date).tz_localize(None)
 
         filtered_spy = [
@@ -174,17 +171,15 @@ async def signals_for_the_period(code, trade_date):
             tradeday.strftime("%Y-%m-%d"), filtered_code, filtered_spy
         )
 
-        # print(latest_signal)
-
         position_status = latest_signal["position_status"]
 
         if position_status == "F":
-            buySignals = runAllBuyConditions(
+            buySignals = run_all_buy_conditions(
                 filtered_code, tradeday.strftime("%Y-%m-%d"), filtered_spy
             )
             logger.info(f'Trade day: {tradeday.strftime("%Y-%m-%d")}, stock: {code}')
             logger.info(F'Buy signals: {buySignals}')
-            buy = isBuy(buySignals)
+            buy = is_buy(buySignals)
 
             exit_price = 0
             if latest_signal['next_open_action'] == "S":
@@ -227,13 +222,11 @@ async def signals_for_the_period(code, trade_date):
             if latest_signal["next_open_action"] == "B":
                 entry_date = tradeday.strftime("%Y-%m-%d")
                 entry_price = bar.open
-                # print(entry_date)
-                # print(entry_price)
 
 
             # next_open_action = latest_signal.get("next_open_action")
             exit1 = to_float_or_none(latest_signal.get("exit1"))
-            sellSignals = runAllSellConditions(
+            sellSignals = run_all_sell_conditions(
                 filtered_code,
                 filtered_spy,
                 entry_date,
@@ -243,7 +236,7 @@ async def signals_for_the_period(code, trade_date):
             )
             logger.info(f'Trade day: {tradeday.strftime("%Y-%m-%d")}, stock: {code}')
             logger.info(f'Sell signals: {sellSignals}')
-            sell = isSell(sellSignals['conditions'])
+            sell = is_sell(sellSignals['conditions'])
             new_stop_loss = sellSignals['stop_loss']
             result = {
                 "code": code,
@@ -269,9 +262,7 @@ async def signals_for_the_period(code, trade_date):
                 "next_open_action": "S" if sell else "N",
             }
             results_batch.append(result)
-            # print(result)
-            # return result
-            
+
     if len(results_batch) > 0:
         await append_to_signals_csv(results_batch, code)
         # logger.info(f"Appended {len(results_batch)} rows to {code}.csv: {'OK' if ok else 'FAILED'}")        
@@ -345,12 +336,12 @@ async def get_latest_signal(
 
     rows: List[Dict[str, Any]] = await file_service.read_data_from_csv(file_name)
     if not rows:
-        print(f"Немає записів у файлі data/{file_name}.csv")
+        logger.warning(f"No records in file data/{file_name}.csv")
         return None
 
     filtered = [r for r in rows if r.get("code") == code]
     if not filtered:
-        print(f"Немає записів для коду {code}")
+        logger.warning(f"No records for code {code}")
         return None
 
     def _parse_dt(v) -> Optional[pd.Timestamp]:
@@ -361,7 +352,7 @@ async def get_latest_signal(
 
     filtered = [r for r in filtered if _parse_dt(r.get("tradeday")) is not None]
     if not filtered:
-        print(f"Немає валідних дат tradeday для коду {code}")
+        logger.warning(f"No valid tradeday dates for code {code}")
         return None
 
     latest = max(filtered, key=lambda r: _parse_dt(r.get("tradeday")))

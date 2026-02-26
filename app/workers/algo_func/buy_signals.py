@@ -107,7 +107,7 @@ def mean(arr: List[float]) -> float:
 
 
 #TODO B1 ++
-def checkB1(ohlcv: List[OHLCV], targetDate) -> bool:
+def check_b1(ohlcv: List[OHLCV], targetDate) -> bool:
     if len(ohlcv) < 51:
         return False
     logger.info(f"Day - {targetDate}")
@@ -179,7 +179,7 @@ def slope_sma_bbw_mc(sma_bbw: List[float], length: int) -> float:
 
     return slope1
 
-def checkB3(ohlcv: List[OHLCV]) -> bool:
+def check_b3(ohlcv: List[OHLCV]) -> bool:
     SMA_BBW_LEN = 72
     LR_LEN = 58
 
@@ -213,7 +213,7 @@ def checkB3(ohlcv: List[OHLCV]) -> bool:
     return slope < 0
 
 #TODO B8 ++
-def checkB8(ohlcv: List[OHLCV]) -> bool:
+def check_b8(ohlcv: List[OHLCV]) -> bool:
     if len(ohlcv) < 270:
         return False
 
@@ -227,7 +227,7 @@ def checkB8(ohlcv: List[OHLCV]) -> bool:
     return recent46Low > pastMinRange
 
 #TODO B9 ++
-def checkB9(ohlcv: List[OHLCV]) -> bool:
+def check_b9(ohlcv: List[OHLCV]) -> bool:
     if len(ohlcv) < 50:
         return False
 
@@ -253,7 +253,7 @@ def checkB9(ohlcv: List[OHLCV]) -> bool:
     return not (condCloseBelowMid and condHighEarlierThanLow)
 
 #TODO B10 ++
-def checkB10(
+def check_b10(
     ohlcv: List[OHLCV],
     lookback_period: int = 250,
     recent_period: int = 68
@@ -312,7 +312,7 @@ def checkB10(
 from typing import List
 
 
-def checkB11(ohlcv: List["OHLCV"]) -> bool:
+def check_b11(ohlcv: List["OHLCV"]) -> bool:
     ohlcv = sorted(ohlcv, key=lambda x: to_ts(x.date))
     n = len(ohlcv)
 
@@ -340,7 +340,7 @@ def checkB11(ohlcv: List["OHLCV"]) -> bool:
     return not (current > 0.87 * max_prev)
 
 #TODO B12 ++
-def checkB12(
+def check_b12(
     ohlcv: List["OHLCV"],
     input_B12_growth: float = 0.16,
     input_B12_days: int = 50,
@@ -409,7 +409,7 @@ def checkB12(
     return not ((sma_growth > input_B12_growth) and (deviation > input_B12_deviation))
 
 #TODO B13 ++
-def checkB13(
+def check_b13(
     ohlcvStock: List[OHLCV],
     ohlcvIndex: List[OHLCV],
     input_B13_XX: int = 19,
@@ -459,10 +459,10 @@ def checkB13(
     
     Usage:
         # For HK Algo (default):
-        checkB13(stock_data, hsi_data)  # Uses 19 and 60
+        check_b13(stock_data, hsi_data)  # Uses 19 and 60
         
         # For US King:
-        checkB13(stock_data, spy_data, input_B13_XX=19, input_B13_YY=100)
+        check_b13(stock_data, spy_data, input_B13_XX=19, input_B13_YY=100)
     """
     if not ohlcvStock or not ohlcvIndex:
         return False
@@ -517,7 +517,7 @@ def checkB13(
         return True  # Allow buy - stock performing OK
 
 #TODO B18
-def checkB18(ohlcv: List[OHLCV], targetDate: str) -> bool:
+def check_b18(ohlcv: List[OHLCV], targetDate: str) -> bool:
     if not ohlcv or len(ohlcv) < 250:
         logger.info(f"Insufficient data for {targetDate}. Length of ohlcv: {len(ohlcv)}")
         return False
@@ -611,7 +611,7 @@ def wilder_atr(highs: List[float], lows: List[float], closes: List[float], perio
 
     return atr_values
 
-def calcS1Stop(ohlcv: List[OHLCV], factor: float = 3.7, atrPeriod: int = 22, 
+def calc_s1_stop(ohlcv: List[OHLCV], factor: float = 3.7, atrPeriod: int = 22, 
                entryClose: Optional[float] = None) -> float:
     if not ohlcv or len(ohlcv) < atrPeriod + 1:
         return float('nan')
@@ -639,21 +639,21 @@ def calcS1Stop(ohlcv: List[OHLCV], factor: float = 3.7, atrPeriod: int = 22,
         return round(close * (1 - 0.095), 4)   
     return round(baseStop, 4)
 
-def runAllBuyConditions(ohlcv: List[OHLCV], targetDate: str, spyData: List[OHLCV]) -> Dict[str, Union[bool, float]]:
+def run_all_buy_conditions(ohlcv: List[OHLCV], targetDate: str, spyData: List[OHLCV]) -> Dict[str, Union[bool, float]]:
     return {
-        'B1':  checkB1(ohlcv, targetDate),
-        'B3':  checkB3(ohlcv),
-        'B8':  checkB8(ohlcv),
-        'B9':  checkB9(ohlcv),
-        'B10': checkB10(ohlcv),
-        'B11': checkB11(ohlcv),
-        'B12': checkB12(ohlcv),
-        'B13': checkB13(ohlcv, spyData),
-        'B18': checkB18(ohlcv, targetDate),
-        'stopLoss': calcS1Stop(ohlcv)
+        'B1':  check_b1(ohlcv, targetDate),
+        'B3':  check_b3(ohlcv),
+        'B8':  check_b8(ohlcv),
+        'B9':  check_b9(ohlcv),
+        'B10': check_b10(ohlcv),
+        'B11': check_b11(ohlcv),
+        'B12': check_b12(ohlcv),
+        'B13': check_b13(ohlcv, spyData),
+        'B18': check_b18(ohlcv, targetDate),
+        'stopLoss': calc_s1_stop(ohlcv)
     }
 
-def isBuy(signals: Dict[str, Union[bool, float]]) -> bool:
+def is_buy(signals: Dict[str, Union[bool, float]]) -> bool:
     return bool((signals['B1'] and signals['B3'] and signals['B8'] and 
             signals['B9'] and signals['B10'] and signals['B11'] and 
             signals['B12'] and signals['B13']) or signals['B18'])

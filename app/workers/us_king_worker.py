@@ -14,8 +14,8 @@ from app.workers.algo_func.get_code_energy import (
     calculate_E4,
     calculate_E5
 )
-from app.workers.algo_func.buy_king import runAllBuyConditions_US, isBuy_US
-from app.workers.algo_func.sell_king import runAllSellConditions_US, isSell_US
+from app.workers.algo_func.buy_king import run_all_buy_conditions_us, is_buy_us
+from app.workers.algo_func.sell_king import run_all_sell_conditions_us, is_sell_us
 from app.config.config import INVESTED_AMOUNT, RESULTS_FILE_NAME, PROFIT_FILE_NAME, BENCHMARK_US_KING, US_KING_START_DAY, US_KING_END_DAY
 
 logger = logging.getLogger(__name__)
@@ -191,7 +191,7 @@ async def process_us_king_task(task_data):
                 
                 logger.info(f"------- Running US King Sell conditions for {trade_date} -------")
                 
-                sell_results = runAllSellConditions_US(
+                sell_results = run_all_sell_conditions_us(
                     stock_ohlcv, 
                     benchmark_ohlcv, 
                     entry_index,
@@ -213,7 +213,7 @@ async def process_us_king_task(task_data):
                 )
                 logger.info(f"Sell results: {sell_results_formatted}")
                 
-                is_sell = isSell_US(sell_signals)
+                is_sell = is_sell_us(sell_signals)
                 
                 position_status = current_position_status
                 today_open_action = next_open_action
@@ -238,14 +238,14 @@ async def process_us_king_task(task_data):
             elif current_position_status == "F":
                 logger.info(f"------- Running US King Buy conditions for {trade_date} -------")
                 
-                buy_results = runAllBuyConditions_US(stock_ohlcv, benchmark_ohlcv, trade_date)
+                buy_results = run_all_buy_conditions_us(stock_ohlcv, benchmark_ohlcv, trade_date)
                 
                 buy_results_formatted = ",".join(
                     "1" if buy_results.get(key, False) else "0" 
                     for key in ['B1', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B18', 'B20', 'B21', 'B22']
                 )
 
-                is_buy = isBuy_US(buy_results)
+                is_buy = is_buy_us(buy_results)
                 
                 position_status = current_position_status
                 today_open_action = next_open_action

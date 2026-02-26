@@ -117,7 +117,6 @@ docker-compose exec api /bin/bash
 #### Functions & Variables
 
 - **Functions:** `snake_case` - **ALWAYS** (e.g., `process_algorithm_task`, `check_b1`, `calculate_rsi`)
-    - ⚠️ **NEVER use camelCase** for function names (no `checkB1`, `isBuy`, etc.)
 - **Async functions:** `async def snake_case` (e.g., `async def get_stock_data`)
 - **Private helpers:** `_leading_underscore` (e.g., `_read_existing_header`, `_to_float_or_zero`)
 - **Local variables:** `snake_case` (e.g., `stock_code`, `task_id`, `file_path`)
@@ -132,31 +131,8 @@ docker-compose exec api /bin/bash
 
 **Critical:** Use modern Python 3.10+ syntax exclusively.
 
-✅ **Correct (Modern Python 3.10+):**
-
-```python
-def process_data(items: list[str]) -> dict[str, int] | None:
-    """Process items and return result dictionary."""
-    pass
-
-async def fetch_stock(code: str, start_date: str) -> OHLCV | None:
-    """Fetch stock data from API."""
-    pass
-
-def calculate_indicators(values: list[float], period: int = 20) -> list[dict[str, float]]:
-    """Calculate technical indicators."""
-    pass
-```
-
-❌ **Forbidden (Legacy typing module):**
-
-```python
-from typing import List, Dict, Optional  # DO NOT USE
-
-def process_data(items: List[str]) -> Optional[Dict[str, int]]:  # Legacy syntax
-    pass
-```
-
+**Correct (Modern Python 3.10+):**
+**Forbidden (Legacy typing module):**
 **Requirements:**
 
 - **All functions/methods** must have type hints for parameters and return values
@@ -195,78 +171,16 @@ from app.services.queue_service import QueueService
 
 ### Service Classes Pattern
 
-**Standard:** Instance-based services with `__init__` for dependency injection.
-
-✅ **Correct Pattern:**
-
-```python
-class FileService:
-    """Service for CSV file operations."""
-
-    def __init__(self, data_dir: str = "data"):
-        """Initialize FileService with data directory.
-
-        Args:
-            data_dir: Path to data directory (default: "data")
-        """
-        self.data_dir = data_dir
-        self.logger = logging.getLogger(__name__)
-
-    async def add_data_to_csv(self, file_name: str, data: list[dict], fieldnames: list[str]) -> bool:
-        """Add data to CSV file."""
-        file_path = f"{self.data_dir}/{file_name}.csv"
-        # Implementation
-        return True
-```
-
-❌ **Avoid Static Methods (unless truly stateless):**
-
-```python
-class QueueService:
-    @staticmethod  # Avoid this pattern for services with state
-    def add_to_queue(data):
-        pass
-```
+- Use instance-based services with `__init__` for dependency injection.
+- Avoid `@staticmethod` on service methods unless the method is truly stateless.
 
 ### Async/Await Guidelines
 
-**Critical:** Async functions must not block the event loop.
+- Async functions must not block the event loop.
+- Use `aiofiles` for async file I/O instead of built-in `open()`.
+- Use `aiohttp` for async HTTP requests instead of `requests`.
 
-❌ **Bad (Blocking I/O in async function):**
-
-```python
-async def process_file(file_path: str):
-    # WRONG: Blocking file I/O
-    with open(file_path, 'r') as f:
-        data = f.read()
-
-    # WRONG: Blocking HTTP request
-    response = requests.get(API_URL)
-
-    return data
-```
-
-✅ **Correct (Non-blocking I/O):**
-
-```python
-import aiofiles
-import aiohttp
-
-async def process_file(file_path: str):
-    # Use aiofiles for async file I/O
-    async with aiofiles.open(file_path, 'r') as f:
-        data = await f.read()
-
-    # Use aiohttp for async HTTP requests
-    async with aiohttp.ClientSession() as session:
-        async with session.get(API_URL) as response:
-            result = await response.json()
-
-    return data
-```
-
-**⚠️ Current Technical Debt:**  
-Many async functions currently use blocking I/O (`open()`, `requests.get()`). This is documented for future refactoring. For new code, use `aiofiles` and `aiohttp`.
+**⚠️ Current Technical Debt:** Many async functions currently use blocking I/O (`open()`, `requests.get()`). This is documented for future refactoring. For new code, use `aiofiles` and `aiohttp`.
 
 ### Error Handling by Layer
 
@@ -279,44 +193,12 @@ Many async functions currently use blocking I/O (`open()`, `requests.get()`). Th
 
 ### Logging Standard
 
-**Pattern:** Use Python's standard logging module, never `print()`.
-
-```python
-import logging
-
-logger = logging.getLogger(__name__)
-
-async def process_task(task_id: str, stock_code: str):
-    logger.info(f"Starting task {task_id} for stock {stock_code}")
-
-    try:
-        result = await fetch_data(stock_code)
-        logger.debug(f"Fetched {len(result)} records for {stock_code}")
-
-        if not result:
-            logger.warning(f"No data found for stock {stock_code}")
-            return None
-
-        logger.info(f"Task {task_id} completed successfully")
-        return result
-
-    except Exception as e:
-        logger.error(f"Task {task_id} failed: {str(e)}", exc_info=True)
-        raise
-```
-
-❌ **Forbidden:**
-
-```python
-print(f"Processing task {task_id}")  # NEVER use print()
-```
-
-**Log Levels:**
-
-- `logger.debug()` - Verbose diagnostic information
-- `logger.info()` - General informational messages
-- `logger.warning()` - Recoverable issues
-- `logger.error()` - Errors that prevent task completion
+- Use Python's standard `logging` module — never `print()`.
+- Log Levels:
+    - `logger.debug()` — Verbose diagnostic information
+    - `logger.info()` — General informational messages
+    - `logger.warning()` — Recoverable issues
+    - `logger.error()` — Errors that prevent task completion
 
 ---
 
@@ -485,5 +367,4 @@ LOG_LEVEL=INFO                # DEBUG, INFO, WARNING, ERROR, CRITICAL
 **Last Updated:** February 26, 2026  
 **Maintained By:** Algorithm Testing Team  
 **Python Version:** 3.11+  
-**Framework:** FastAPI 0.104.1  
-**Questions?** Refer to project documentation in `docs/` or open an issue.
+**Framework:** FastAPI 0.104.1
