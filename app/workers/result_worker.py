@@ -9,20 +9,18 @@ import pandas as pd
 from app.services.file_service import FileService
 from app.models.algorithm_models import UnifiedTradeSignal
 from app.services.queue_service import QueueService
+from app.config.config import HT_START_DAY, HT_END_DAY, FIXED_DEPOSIT_AMOUNT, GENERAL_RESULTS_FILE
 
 # --- CONFIGURATION ---
-FIXED_DEPOSIT_AMOUNT = 10000.0
-GENERAL_RESULTS_FILE = "general_results"
+START_DATE = HT_START_DAY
+END_DATE = HT_END_DAY
+API_KEY = os.getenv('API_KEY')
 
 class ErrorResponse(TypedDict):
     error: str
     detail: Optional[str]
 
 logger = logging.getLogger(__name__)
-
-API_KEY = os.getenv('API_KEY')
-START_DATE = "2009-03-06"
-END_DATE = "2019-03-06"
 
 file_service = FileService()
 
@@ -72,7 +70,6 @@ async def save_financial_results(stock_code: str, algo_data: List[Dict[str, Any]
         else:
             exit_day_val = stop_signal_val
 
-        # 4. Формування запису
         record = {
             "symbol": stock_code,
             "entryDay": row.get("Buy Signal", ""),
@@ -96,10 +93,8 @@ async def save_financial_results(stock_code: str, algo_data: List[Dict[str, Any]
     
     await file_service.add_data_to_csv(GENERAL_RESULTS_FILE, mapped_rows, fieldnames)
 
-
-
 async def load_server_data(stock_code:str) -> Union[Tuple[List[UnifiedTradeSignal], List[Optional[datetime]]], ErrorResponse]:
-    """Завантажує дані з API, повертає підготовлений масив сигналів та масив торгових днів"""
+    """Load data from API and convert to unified format"""
     try:
         API_URL = f'http://ete.stockfisher.com.hk/v1.1/debugHKEX/verifyData?TradeDay=&Code={stock_code}&verifyType=signal'
         headers = {'x-api-key': API_KEY}
@@ -214,7 +209,7 @@ async def load_server_data(stock_code:str) -> Union[Tuple[List[UnifiedTradeSigna
         return { "error": "API error", "detail": "API error"}
 
 def convert_csv_to_unified(csv_row: dict) -> UnifiedTradeSignal:
-    """Конвертує CSV рядок до UnifiedTradeSignal"""
+    """Convert CSV row to UnifiedTradeSignal"""
     try:
         buy_signal_str = csv_row.get('Buy Signal', '')
         stop_signal_str = csv_row.get('Stop Signal', '')
@@ -348,7 +343,6 @@ async def process_result_task(processing_data):
                 else:
                     buy_match = False
 
-                # Перевірка stop_signal
                 api_stop_index = None
                 csv_stop_index = None
                     

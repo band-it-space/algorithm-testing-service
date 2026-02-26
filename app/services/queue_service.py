@@ -3,7 +3,6 @@ import uuid
 from datetime import datetime, date
 from typing import Dict, List
 from app.config.queue_config import algorithm_calculation_queue, result_processing_queue,us_king_calculation_queue
-from app.models.algorithm_models import AlgorithmRequest, QueueTask
 
 class QueueService:
     @staticmethod

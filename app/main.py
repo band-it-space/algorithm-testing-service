@@ -4,12 +4,7 @@ import logging
 from app.config.logging_config import setup_logging
 
 from app.controllers.algorithm_controller import algorithm_router
-# from app.controllers.data_test_controller import data_test_controller
-# from app.controllers.monitoring_controller import monitoring_router
 from app.controllers.summary_controller import generate_summary_file
-
-from app.workers.algorithm_worker import process_algorithm_task
-from app.workers.result_worker import process_result_task
 
 
 setup_logging()

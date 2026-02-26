@@ -1,13 +1,9 @@
-from app.services.get_all_stoccks import get_stocks_codes
 from fastapi import APIRouter, HTTPException
-from app.models.algorithm_models import AlgorithmRequest, AlgorithmResponse
+
 from app.services.queue_service import QueueService
 from app.services.file_service import FileService
+from app.config.config import HK_STOCKS_FILE, HK_RESULTS_FILE, US_KING_STOCKS_FILE
 algorithm_router = APIRouter()
-
-HK_STOCKS_FILE = "screener"
-HK_RESULTS_FILE = "results"
-US_KING_STOCKS_FILE = "us_king_screener"
 
 @algorithm_router.get("/hkex")
 async def init_algo_testing():

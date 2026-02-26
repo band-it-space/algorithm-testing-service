@@ -1,9 +1,6 @@
 import os
 from dotenv import load_dotenv
 
-
-
-
 import requests
 from datetime import datetime
 
@@ -11,14 +8,15 @@ load_dotenv()
 
 # API configuration
 API_KEY = os.getenv('API_KEY')
-US_KING_API_KEY = os.getenv('US_KING_API_KEY', "20260212_hkex_data_v")
+US_KING_API_KEY = os.getenv('US_KING_API_KEY')
+STOCKFISHER_URL = os.getenv('STOCKFISHER_URL')
 
 
 async def get_stock_data_from_db(code: str, end_date: str | None = None):
-    if not API_KEY:
-        raise RuntimeError("STOCKFISHER_API_KEY not found in environment variables")
+    if not API_KEY or not STOCKFISHER_URL:
+        raise RuntimeError("STOCKFISHER_API_KEY or STOCKFISHER_URL not found in environment variables")
     
-    API_URL = f'http://ete.stockfisher.com.hk/v1.1/debugHKEX/verifyData?TradeDay=&Code={code}&verifyType=price'
+    API_URL = f'{STOCKFISHER_URL}/v1.1/debugHKEX/verifyData?TradeDay=&Code={code}&verifyType=price'
     headers = {'x-api-key': API_KEY}
     
     try:
@@ -69,10 +67,10 @@ async def get_stock_data_from_db(code: str, end_date: str | None = None):
     return stock_records
 
 async def us_api_stocks_data(code: str, end_date: str | None = None, verify_type: str = "price", trade_day: str = ""):
-    if not US_KING_API_KEY:
-        raise RuntimeError("US_KING_API_KEY not found in environment variables")
+    if not US_KING_API_KEY or not STOCKFISHER_URL:
+        raise RuntimeError("US_KING_API_KEY or STOCKFISHER_URL not found in environment variables")
     
-    API_URL = f'http://ete.stockfisher.com.hk/v1.1/debugUSStock/verifyData?TradeDay={trade_day}&Code={code}&verifyType={verify_type}'
+    API_URL = f'{STOCKFISHER_URL}/v1.1/debugUSStock/verifyData?TradeDay={trade_day}&Code={code}&verifyType={verify_type}'
     headers = {'x-api-key': US_KING_API_KEY}
     
     try:

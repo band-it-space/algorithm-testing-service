@@ -3,9 +3,8 @@ import numpy as np
 import logging
 import os
 import csv
-import requests
-from datetime import datetime
 
+from app.config.config import HT_START_DAY, HT_END_DAY, BENCHMARK_HK
 from app.services.queue_service import QueueService
 from app.workers.algo_func.get_db_data import get_stock_data_from_db
 from app.services.file_service import FileService
@@ -19,8 +18,8 @@ from app.workers.algo_func.get_code_energy import calculate_energy_indicators_la
 logger = logging.getLogger(__name__)
 API_KEY = os.getenv('API_KEY')
 
-START_DATE = "2019-01-01"
-END_DATE = "2026-01-01"
+START_DATE = HT_START_DAY
+END_DATE = HT_END_DAY
 
 
 async def process_algorithm_task(task_data):
@@ -113,7 +112,7 @@ async def get_data_and_save_to_csv(code: str, trade_date: str, file_service: "Fi
 
 async def signals_for_the_period(code, trade_date):
     print("start")
-    spy_data_raw = await get_stock_data_from_db("2800", trade_date)
+    spy_data_raw = await get_stock_data_from_db(BENCHMARK_HK, trade_date)
     code_data_raw = await get_stock_data_from_db(code, trade_date)
     logger.info(f'Code_data_raw length-{len(code_data_raw)}')
 

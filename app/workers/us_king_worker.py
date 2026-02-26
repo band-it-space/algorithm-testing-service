@@ -2,7 +2,7 @@ import logging
 import os
 from dataclasses import dataclass
 from typing import  Dict, Any, List, Literal,Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from app.workers.algo_func.get_db_data import us_api_stocks_data
 from app.workers.algo_func.types import OHLCV
@@ -16,18 +16,14 @@ from app.workers.algo_func.get_code_energy import (
 )
 from app.workers.algo_func.buy_king import runAllBuyConditions_US, isBuy_US
 from app.workers.algo_func.sell_king import runAllSellConditions_US, isSell_US
-
+from app.config.config import INVESTED_AMOUNT, RESULTS_FILE_NAME, PROFIT_FILE_NAME, BENCHMARK_US_KING, US_KING_START_DAY, US_KING_END_DAY
 
 logger = logging.getLogger(__name__)
 API_KEY = os.getenv('API_KEY')
 
-START_DATE = "2019-01-01"
-END_DATE = "2026-02-24"
-BENCHMARK_CODE = "SPY"
+START_DATE = US_KING_START_DAY
+END_DATE = US_KING_END_DAY
 
-INVESTED_AMOUNT = 10000
-RESULTS_FILE_NAME = "us_king_results"
-PROFIT_FILE_NAME = "us_king_profit_records"
 
 @dataclass
 class DailyTradingState:
@@ -79,7 +75,7 @@ async def process_us_king_task(task_data):
         stock_code = task_data['stock']
         logger.info(f"Processing US_King task: {stock_code}")
         stock_data = await us_api_stocks_data(stock_code, END_DATE)
-        benchmark_data = await us_api_stocks_data(BENCHMARK_CODE, END_DATE)
+        benchmark_data = await us_api_stocks_data(BENCHMARK_US_KING, END_DATE)
 
         if not stock_data or len(stock_data) < 300 or not benchmark_data or len(benchmark_data) < 300:
             logger.warning(f"Not enough data retrieved for stock {stock_code}")
