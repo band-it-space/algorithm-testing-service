@@ -1,6 +1,4 @@
 import os
-import aiomysql
-import asyncio
 from dotenv import load_dotenv
 
 
@@ -8,7 +6,6 @@ from dotenv import load_dotenv
 
 import requests
 from datetime import datetime
-from typing import Any, Dict, List, Optional
 
 load_dotenv()
 
@@ -16,42 +13,8 @@ load_dotenv()
 API_KEY = os.getenv('API_KEY')
 US_KING_API_KEY = os.getenv('US_KING_API_KEY', "20260212_hkex_data_v")
 
-# dbconfig = {
-
-# dbconfig = {
-#     "host": "poc-kl.cluster-cgbcqc4g9atp.ap-southeast-1.rds.amazonaws.com",
-#     "user": "reader",
-#     "password": "OuWoje3zea",
-#     "db": "derivates_crawler",
-#     "port": 3306,
-# }
-
-
-# #! CHEN
-dbconfig = {
-    "host": 'mdbinstance-cluster.cluster-cgbcqc4g9atp.ap-southeast-1.rds.amazonaws.com',
-    "user": 'mdb_admin',
-    "password": 'Gc5H9EEevfhbo16n',
-    "db": 'mdb_v2',
-    "port": 3306,
-}
-
-# Глобальний пул, створюється один раз
-pool: aiomysql.Pool | None = None
-
-async def init_db_pool():
-    """Ініціалізує глобальний пул з'єднань."""
-    global pool
-    if pool is None:
-        pool = await aiomysql.create_pool(
-            minsize=1,
-            maxsize=20,
-            **dbconfig,
-        )
-        print("✅ MySQL connection pool initialized")
 
 async def get_stock_data_from_db(code: str, end_date: str | None = None):
-    """Отримати дані про акції з API."""
     if not API_KEY:
         raise RuntimeError("STOCKFISHER_API_KEY not found in environment variables")
     
@@ -106,7 +69,6 @@ async def get_stock_data_from_db(code: str, end_date: str | None = None):
     return stock_records
 
 async def us_api_stocks_data(code: str, end_date: str | None = None, verify_type: str = "price", trade_day: str = ""):
-    """Отримати дані про акції з API."""
     if not US_KING_API_KEY:
         raise RuntimeError("US_KING_API_KEY not found in environment variables")
     

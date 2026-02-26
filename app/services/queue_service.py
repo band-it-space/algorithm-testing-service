@@ -9,7 +9,7 @@ class QueueService:
     @staticmethod
     def add_to_king_algorithm_queue(stock_code: str) -> str:
         """
-        Додає завдання до us_king_calculation
+        US King Algorithm
         """
         task_id = str(uuid.uuid4())
         
@@ -31,7 +31,7 @@ class QueueService:
     @staticmethod
     def add_to_algorithm_queue(stock_code: str) -> str:
         """
-        Додає завдання до першої черги (algorithm_calculation)
+        HK Algorithm
         """
         task_id = str(uuid.uuid4())
         
@@ -53,7 +53,7 @@ class QueueService:
     @staticmethod
     def add_to_result_processing_queue(stock_code: str) -> str:
         """
-        Додає результат до другої черги (result_processing)
+        Result Processing
         """
         task_id = str(uuid.uuid4())
         
@@ -62,7 +62,6 @@ class QueueService:
             "stock_code": stock_code,
         }
         
-        # Додаємо завдання до черги обробки результатів
         job = result_processing_queue.enqueue(
             'app.workers.result_worker.process_result_task',
             processing_data,
@@ -74,7 +73,7 @@ class QueueService:
     @staticmethod
     def add_to_file_write_queue(stock_code: str, results_data, field_names) -> str:
         """
-        Додає результат до другої черги (file_write)
+        File Write
         """
         task_id = str(uuid.uuid4())
         
@@ -85,7 +84,6 @@ class QueueService:
             "field_names": field_names,
         }
         
-        # Додаємо завдання до черги обробки результатів
         job = result_processing_queue.enqueue(
             'app.workers.file_write_worker.process_file_write_task',
             processing_data,
@@ -93,21 +91,3 @@ class QueueService:
         )
         
         return task_id
-    
-    @staticmethod
-    def get_queue_status():
-        """
-        Повертає статус черг
-        """
-        return {
-            "algorithm_calculation_queue": {
-                "pending_jobs": len(algorithm_calculation_queue),
-                "failed_jobs": len(algorithm_calculation_queue.failed_job_registry),
-                "completed_jobs": len(algorithm_calculation_queue.completed_job_registry)
-            },
-            "result_processing_queue": {
-                "pending_jobs": len(result_processing_queue),
-                "failed_jobs": len(result_processing_queue.failed_job_registry),
-                "completed_jobs": len(result_processing_queue.completed_job_registry)
-            }
-        }

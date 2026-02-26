@@ -7,7 +7,7 @@ import requests
 from datetime import datetime
 
 from app.services.queue_service import QueueService
-from app.workers.algo_func.get_db_data import get_stock_data_from_db, init_db_pool
+from app.workers.algo_func.get_db_data import get_stock_data_from_db
 from app.services.file_service import FileService
 from app.workers.algo_func.buy_signals import runAllBuyConditions, isBuy
 from app.workers.algo_func.types import OHLCV
@@ -19,20 +19,18 @@ from app.workers.algo_func.get_code_energy import calculate_energy_indicators_la
 logger = logging.getLogger(__name__)
 API_KEY = os.getenv('API_KEY')
 
-START_DATE = "2009-03-06"
+START_DATE = "2019-01-01"
 END_DATE = "2026-01-01"
 
 
 async def process_algorithm_task(task_data):
     """
-    Воркер для обробки алгоритмів (перша черга)
-    Тут ви додасте свою логіку розрахунків
+    First queue worker - performs algorithm calculations and generates signals, then adds result to second queue for processing
     """
 
     try:
         stock_code = task_data['stock']
         logger.info(f"Processing algorithm task: {stock_code}")
-        await init_db_pool()
 
         logger.info('Starting get_data_and_save_to_csv')
         await get_data_and_save_to_csv(stock_code, START_DATE)
@@ -46,7 +44,6 @@ async def process_algorithm_task(task_data):
         await format_signals_csv_inplace(file_service=FileService(), file_name=stock_code)
         logger.info('Finished format_signals_csv_inplace')
 
-        # Додаємо результат до другої черги
         processing_task_id = QueueService.add_to_result_processing_queue(stock_code)
         
         logger.info(f"Algorithm task {task_data['task_id']} completed, added to processing queue: {processing_task_id}")
@@ -107,18 +104,13 @@ async def get_data_and_save_to_csv(code: str, trade_date: str, file_service: "Fi
             fieldnames=fieldnames,
         )
         if saved:
-            # logger.info(f"Дані успішно записано у файл data/{code}.csv")
             return csv_row
         else:
-            # logger.info("Помилка під час запису CSV через FileService")
             return None
 
     except Exception as e:
-        print(f"Помилка при записі CSV: {e}")
         return None
 
-
-# Write calculated metrics to CVS - before signals
 async def signals_for_the_period(code, trade_date):
     print("start")
     spy_data_raw = await get_stock_data_from_db("2800", trade_date)
@@ -284,7 +276,7 @@ async def signals_for_the_period(code, trade_date):
     if len(results_batch) > 0:
         await append_to_signals_csv(results_batch, code)
         # logger.info(f"Appended {len(results_batch)} rows to {code}.csv: {'OK' if ok else 'FAILED'}")        
-            
+
 def to_float_or_none(v):
     if v is None:
         return None
@@ -343,8 +335,6 @@ async def append_to_signals_csv(
         fieldnames=fieldnames,
     )
 
-
-
 async def get_latest_signal(
     code: str,
     file_service: "FileService" = None,
@@ -377,28 +367,6 @@ async def get_latest_signal(
 
     latest = max(filtered, key=lambda r: _parse_dt(r.get("tradeday")))
     return latest
-
-def _to_float_or_none(v):
-    if v is None:
-        return None
-    if isinstance(v, (int, float, np.floating)):
-        return float(v)
-    s = str(v).strip()
-    if s == "" or s.lower() in ("none", "nan"):
-        return None
-    s = s.replace(" ", "").replace(",", ".")
-    try:
-        return float(s)
-    except Exception:
-        return None
-
-def _to_date_str_or_none(v):
-    if v is None:
-        return None
-    try:
-        return pd.to_datetime(v).strftime("%Y-%m-%d")
-    except Exception:
-        return None
 
 async def format_signals_csv_inplace(
     file_service: "FileService" = None,
@@ -522,3 +490,28 @@ async def format_signals_csv_inplace(
             writer.writerow(r)
 
     return out_df
+
+
+
+def _to_float_or_none(v):
+    if v is None:
+        return None
+    if isinstance(v, (int, float, np.floating)):
+        return float(v)
+    s = str(v).strip()
+    if s == "" or s.lower() in ("none", "nan"):
+        return None
+    s = s.replace(" ", "").replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+def _to_date_str_or_none(v):
+    if v is None:
+        return None
+    try:
+        return pd.to_datetime(v).strftime("%Y-%m-%d")
+    except Exception:
+        return None
+

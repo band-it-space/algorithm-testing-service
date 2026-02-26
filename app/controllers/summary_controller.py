@@ -6,8 +6,8 @@ from app.services.file_service import FileService
 generate_summary_file = APIRouter()
 logger = logging.getLogger(__name__)
 
-INPUT_FILE = "general_results"
-OUTPUT_FILE = "summary"
+INPUT_FILE = "us_king_profit_records"
+OUTPUT_FILE = "summary_us"
 
 @generate_summary_file.get("/")
 async def generate_summary():

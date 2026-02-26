@@ -1,10 +1,9 @@
 import logging
 import os
 from dataclasses import dataclass
-from typing import  Dict, Any, List, Literal
+from typing import  Dict, Any, List, Literal,Optional
 from datetime import datetime, timedelta
 
-from app.services.queue_service import QueueService
 from app.workers.algo_func.get_db_data import us_api_stocks_data
 from app.workers.algo_func.types import OHLCV
 from app.services.file_service import FileService
@@ -23,7 +22,7 @@ logger = logging.getLogger(__name__)
 API_KEY = os.getenv('API_KEY')
 
 START_DATE = "2019-01-01"
-END_DATE = "2026-02-20;"
+END_DATE = "2026-02-24"
 BENCHMARK_CODE = "SPY"
 
 INVESTED_AMOUNT = 10000
@@ -51,6 +50,9 @@ class DailyTradingState:
     exit_price: float
     exit1: float = 0.0
 
+    buy_signals: Optional[Dict[str, bool]] = None
+    sell_signal: Optional[str] = None
+
 @dataclass
 class ProfitRecord:
     symbol: str
@@ -61,6 +63,8 @@ class ProfitRecord:
     profit: float | Literal[""]
     profit_percent: float | Literal[""]
     invested: float
+    buy_conditions: Dict[str, bool]
+    sell_conditions: str
 
 
 async def process_us_king_task(task_data):
@@ -68,10 +72,12 @@ async def process_us_king_task(task_data):
     Worker function to process US King algorithm task. This function will perform the following steps:
     """
     try:
+        #========================================
+        # Stage 1 - Get and align data
+        #========================================
+
         stock_code = task_data['stock']
         logger.info(f"Processing US_King task: {stock_code}")
-
-        # Stage 1 - Get and align data
         stock_data = await us_api_stocks_data(stock_code, END_DATE)
         benchmark_data = await us_api_stocks_data(BENCHMARK_CODE, END_DATE)
 
@@ -89,6 +95,7 @@ async def process_us_king_task(task_data):
 
         #========================================
         #Stage 2 - Prepare indexes
+        #========================================
         dates = aligned_data["dates"]
         
         start_idx = next((i for i, date in enumerate(dates) if date >= START_DATE), None)
@@ -103,9 +110,10 @@ async def process_us_king_task(task_data):
 
         #========================================
         #Stage 3 - Calculate buy/sell signals
+        #========================================
         historical_data: List[DailyTradingState] = []
         
-        # Initialize state variables
+        # State variables
         current_position_status = "F"
         next_open_action = "N"
         today_open_action = "N"
@@ -116,9 +124,10 @@ async def process_us_king_task(task_data):
         exit_price = 0
         exit1 = 0
         
-        # Separate stop loss tracking
         s1_stop = 0  # Static stop
         s5_stop = 0  # Trailing stop
+        sell_signal = ''
+        buy_signals = {}
         
 
         first_day_data = await us_api_stocks_data(stock_code, END_DATE, verify_type="signal", trade_day=dates[start_idx] )
@@ -126,7 +135,8 @@ async def process_us_king_task(task_data):
         
         current_position_status = first_signal_data.get("position_status", "F")
         
-        # Using just to get position where entry_date is set, to start calculations from that day if already in position
+        # If position is already open, shift start_idx back to entry date
+        # API data will be filtered accordingly to match this calculation period
         if current_position_status == "I":
             api_entry_date = first_signal_data.get("entry_date")
             entry_idx = dates.index(api_entry_date)
@@ -137,8 +147,6 @@ async def process_us_king_task(task_data):
 
         # Calculate energy signals for the entire period first to have them ready for buy/sell signal calculations
         energy_signals = calculate_energy_signals_for_period(aligned_data, start_idx, end_idx)
-
-        logger.info(f"Calculation range: {dates[start_idx]} to {dates[end_idx]}")
         
         for day_idx in range(start_idx, end_idx + 1):
             trade_date = dates[day_idx]
@@ -149,7 +157,7 @@ async def process_us_king_task(task_data):
                 continue
             energy_data = energy_signals[energy_idx]
             
-            #! === SIGNALS CALCULATION ===
+            # ====== SIGNALS CALCULATION =======
 
             stock_ohlcv = [ 
                 OHLCV(
@@ -159,7 +167,7 @@ async def process_us_king_task(task_data):
                     low=bar["low"],
                     close=bar["close"],
                     volume=bar.get("volume")
-                ) for bar in aligned_data["stock"][:day_idx + 1]  # ← aligned_data["stock"]
+                ) for bar in aligned_data["stock"][:day_idx + 1]
             ]
 
             benchmark_ohlcv = [ 
@@ -170,7 +178,7 @@ async def process_us_king_task(task_data):
                     low=bar["low"],
                     close=bar["close"],
                     volume=bar.get("volume")
-                ) for bar in aligned_data["benchmark"][:day_idx + 1]  # ← aligned_data["benchmark"]
+                ) for bar in aligned_data["benchmark"][:day_idx + 1]
             ]
             
 
@@ -181,14 +189,11 @@ async def process_us_king_task(task_data):
                     entry_index = day_idx
                     entry_price = stock_ohlcv[-1].open
                 
-                # Safety check: entry_date must be set when in position
                 if entry_date is None or entry_index is None:
                     logger.error(f"Entry date/index is None while in position on {trade_date}. Skipping sell checks.")
                     continue
                 
-                # Ми В позиції -> перевіряємо Sell сигнали
                 logger.info(f"------- Running US King Sell conditions for {trade_date} -------")
-                logger.info(f"Entry date: {entry_date}, Entry index: {entry_index}, Entry price: {entry_price}, exit1: {exit1}")
                 
                 sell_results = runAllSellConditions_US(
                     stock_ohlcv, 
@@ -224,10 +229,11 @@ async def process_us_king_task(task_data):
                     # Set exit price as next day's open price
                     if day_idx + 1 < len(aligned_data["stock"]):
                         exit_price = aligned_data["stock"][day_idx + 1]["open"]
-                    else:
-                        #TODO Fallback to current day close if next day data is not available 
+                    else: 
                         logger.info(f"No next day data for exit price on {trade_date}")
                         exit_price = stock_ohlcv[-1].close
+                    # Sell signal
+                    sell_signal = next((key for key, value in sell_signals.items() if value ))
                 else:
                     current_position_status = "I"
                 
@@ -243,8 +249,6 @@ async def process_us_king_task(task_data):
                     for key in ['B1', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B18', 'B20', 'B21', 'B22']
                 )
 
-                logger.info(f"Buy results (binary): {buy_results_formatted}, stop_loss: {buy_results.get('stop_loss')}")
-
                 is_buy = isBuy_US(buy_results)
                 
                 position_status = current_position_status
@@ -254,6 +258,11 @@ async def process_us_king_task(task_data):
                     exit1 = s1_stop = buy_results.get("stop_loss", 0)
                     current_position_status = "I"
                     next_open_action = "B"
+
+                    buy_signals: Dict[str, bool] = { 
+                        key: bool(buy_results.get(key, False)) 
+                        for key in ['B1', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B18', 'B20', 'B21', 'B22']
+    }
                 else:
                     current_position_status = "F"
                     next_open_action = "N"
@@ -275,7 +284,9 @@ async def process_us_king_task(task_data):
                 exit1=exit1,
                 entry_date=entry_date,
                 entry_price=entry_price,
-                exit_price=exit_price
+                exit_price=exit_price,
+                sell_signal=sell_signal,
+                buy_signals=buy_signals
             )
 
             historical_data.append(daily_state)
@@ -290,18 +301,23 @@ async def process_us_king_task(task_data):
                 exit1 = 0
 
             exit_price=0
-
-        logger.info(f"Stage 3 completed!")
-
-
+            sell_signal = ''
+            buy_signals={}
 
         #========================================
         # Stage 4 - Signal comparison
-        logger.info("Starting Stage 4: Signal comparison")
+        #========================================
+        
+        # Get actual calculation start date (may be shifted back if position was open)
+        actual_start_date = dates[start_idx]
+        actual_end_date = dates[end_idx]
         
         api_data = await us_api_stocks_data(stock_code, END_DATE, verify_type="signal")
+        
+        # Filter API data to match the actual calculation period
         filtered_api_data = [ 
-            row for row in api_data if START_DATE <= datetime.fromisoformat(row["date"].replace('Z', '+00:00')).strftime("%Y-%m-%d") <= END_DATE
+            row for row in api_data 
+            if actual_start_date <= datetime.fromisoformat(row["date"].replace('Z', '+00:00')).strftime("%Y-%m-%d") <= actual_end_date
         ]
         
         comparison_results = compare_signals_with_tolerance(historical_data, filtered_api_data)
@@ -313,12 +329,11 @@ async def process_us_king_task(task_data):
 
         #========================================
         # Stage 5 - Calculate and save profit records
-        logger.info("Starting Stage 5: Profit calculation")
+        #========================================
         
         profit_records = calculate_profit_records(historical_data, stock_code)
         await save_profit_records(stock_code, profit_records)
         
-        logger.info(f"Stage 5 completed: Profit records saved ({len(profit_records)} records)")
     except Exception as e:
         logger.error(f"Error processing US King task {task_data['task_id']}: {str(e)}")
         raise e
@@ -405,7 +420,7 @@ def calculate_energy_signals_for_period(
 
 def align_stock_and_benchmark_data(stock_data: List[Dict], benchmark_data: List[Dict]) -> Dict[str, List]:
     """
-    Stage 1: Align stock and benchmark data by date.
+    Align stock and benchmark data by date.
     """
     
     stock_dict = {bar["date"]: bar for bar in stock_data}
@@ -442,8 +457,8 @@ def compare_signals_with_tolerance(
     Compare calculated signals with API data, allowing ±2 trading days tolerance.
     
     Args:
-        historical_data: Calculated trading states
-        api_data: Filtered API signal data
+        historical_data: Calculated trading states for the full calculation period
+        api_data: Filtered API signal data matching the same period as historical_data
         tolerance_days: Number of trading days tolerance for signal matching
         
     Returns:
@@ -609,29 +624,20 @@ def calculate_profit_records(historical_data: List[DailyTradingState], stock_cod
     profit_records: List[ProfitRecord] = []
     current_trade = None
     
-    logger.info(f"=== Calculating profit records for {stock_code} ===")
-    logger.info(f"Total historical data points: {len(historical_data)}")
-    
-    for state in historical_data:
-        # Detect trade entry: position opened and entry_date is set
+    for i, state in enumerate(historical_data):
         if state.position_status == "I" and state.entry_date is not None and current_trade is None:
+            logger.info(f'Day: {state}')
             current_trade = {
                 "symbol": stock_code,
                 "entryDay": state.entry_date,
-                "entryPrice": state.entry_price
+                "entryPrice": state.entry_price,
+                "buy_conditions": historical_data[i -1].buy_signals if historical_data[i -1].buy_signals else {}
             }
-            logger.info(
-                f"📈 TRADE OPENED on {state.entry_date}: "
-                f"Entry price: ${state.entry_price:.4f}, "
-                f"Stop loss (exit1): ${state.exit1:.4f}"
-            )
         
-        # Detect trade exit: signal to sell while in position
         if state.position_status == "I" and state.next_open_action == "S" and current_trade is not None:
             exit_price = state.exit_price
             entry_price = current_trade["entryPrice"]
             
-            # Calculate profit and profit percentage
             profit_percent = ((exit_price - entry_price) / entry_price) * 100
             profit = INVESTED_AMOUNT * ((exit_price - entry_price) / entry_price)
             
@@ -643,18 +649,13 @@ def calculate_profit_records(historical_data: List[DailyTradingState], stock_cod
                 exitPrice=exit_price,
                 profit=profit,
                 profit_percent=profit_percent,
-                invested=INVESTED_AMOUNT
+                invested=INVESTED_AMOUNT,
+                buy_conditions=current_trade.get("buy_conditions", {}),
+                sell_conditions=state.sell_signal if state.sell_signal else ""
             ))
             
-            logger.info(
-                f"📉 TRADE CLOSED on {state.trade_date}: "
-                f"Exit price: ${exit_price:.4f}, "
-                f"Profit: ${profit:.2f} ({profit_percent:.2f}%), "
-                f"Holding period: {state.entry_date} → {state.trade_date}"
-            )
             current_trade = None
-    
-    # Handle open position at end of period
+
     if current_trade is not None:
         profit_records.append(ProfitRecord(
             symbol=current_trade["symbol"],
@@ -664,14 +665,10 @@ def calculate_profit_records(historical_data: List[DailyTradingState], stock_cod
             exitPrice="Open position",
             profit="",
             profit_percent="",
-            invested=INVESTED_AMOUNT
+            invested=INVESTED_AMOUNT,
+            buy_conditions=current_trade.get("buy_conditions", {}),
+            sell_conditions=""
         ))
-        logger.info(
-            f"🔓 OPEN POSITION at end of period: "
-            f"Entry {current_trade['entryDay']} @ ${current_trade['entryPrice']:.4f}"
-        )
-    
-    logger.info(f"=== Total profit records generated: {len(profit_records)} ===")
     return profit_records
 
 
@@ -692,7 +689,9 @@ async def save_profit_records(stock_code: str, profit_records: List[ProfitRecord
                 "exitPrice": f"{record.exitPrice:.4f}" if isinstance(record.exitPrice, float) else record.exitPrice,
                 "profit": f"{record.profit:.2f}" if isinstance(record.profit, float) else record.profit,
                 "Profit %": f"{record.profit_percent:.2f}" if isinstance(record.profit_percent, float) else record.profit_percent,
-                "Invested": str(int(record.invested))
+                "Invested": str(int(record.invested)),
+                "Buy": ", ".join(f"{key}:1" if value else f"{key}:0" for key, value in record.buy_conditions.items()) if record.buy_conditions else "",
+                "Sell": record.sell_conditions if record.sell_conditions else ""
             }
             for record in profit_records
         ]
@@ -700,13 +699,12 @@ async def save_profit_records(stock_code: str, profit_records: List[ProfitRecord
         fieldnames = [
             "symbol", "entryDay", "entryPrice", 
             "exitDay", "exitPrice", 
-            "profit", "Profit %", "Invested"
+            "profit", "Profit %", "Invested", "Buy", "Sell"
         ]
         
         file_service = FileService()
         await file_service.add_data_to_csv(PROFIT_FILE_NAME, records_data, fieldnames)
         
-        logger.info(f"Profit records saved to {PROFIT_FILE_NAME}.csv")
     except Exception as e:
         logger.error(f"Failed to save profit records: {str(e)}")
 
@@ -739,7 +737,6 @@ async def save_comparison_report(stock_code: str, comparison_results: Dict[str, 
         file_service = FileService()
         await file_service.add_data_to_csv(RESULTS_FILE_NAME, results_data, field_names)
         
-        logger.info(f"Comparison report saved to {RESULTS_FILE_NAME}.csv")
     except Exception as e:
         logger.error(f"Failed to save comparison report: {str(e)}")
 

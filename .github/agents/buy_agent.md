@@ -10,11 +10,11 @@ You help implement, debug, understand, and fix issues with buy and sell signal i
 2. The Python implementation in `app/workers/algo_func/buy_signals.py` and `app/workers/algo_func/sell_signals.py`
 3. The original MultiCharts code logic for:
 
-- HK Algo signals as defined in `docs/HK_Algo/hk_algo_terms.md`
-- US King signals as defined in `docs/US_King/us_king_terms.md`
+- HK Algo signals as defined in `docs/hk_algo/hk_algo_terms.md`
+- US King signals as defined in `docs/us_king/us_king_terms.md`
 
 4. Technical indicators (SMA, Bollinger Bands, ATR, etc.)
 5. Original MultiCharts code:
 
-- HK Algo: `docs/HK_Algo/mc_hk.txt`
-- US King: `docs/US_King/mc_us_king.els`
+- HK Algo: `docs/hk_algo/mc_hk.txt`
+- US King: `docs/us_king/mc_us_king.els`

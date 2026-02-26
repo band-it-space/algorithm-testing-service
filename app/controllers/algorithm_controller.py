@@ -5,24 +5,26 @@ from app.services.queue_service import QueueService
 from app.services.file_service import FileService
 algorithm_router = APIRouter()
 
+HK_STOCKS_FILE = "screener"
+HK_RESULTS_FILE = "results"
+US_KING_STOCKS_FILE = "us_king_screener"
+
 @algorithm_router.get("/hkex")
 async def init_algo_testing():
     """
-    Запускає тестування алгоритму, додаючи завдання до першої черги
+    HK Algorithm
     """
     try:
-        #Робимо запит за всими стоками 
-        #stocks  = await get_stocks_codes()
 
         file_service = FileService()
-        stocks = await file_service.read_data_from_csv("screener")
+        stocks = await file_service.read_data_from_csv(HK_STOCKS_FILE)
         
         if len(stocks) == 0:
             return {
                 "message": "No stocks found",
                 "status": "error",
             }
-        exist = await file_service.read_data_from_csv("results")
+        exist = await file_service.read_data_from_csv(HK_RESULTS_FILE)
 
         existing_codes = {str(item.get("stock_code")) for item in exist}
         
@@ -57,13 +59,12 @@ async def init_algo_testing():
 @algorithm_router.get("/us-king")
 async def init_us_king_testing():
     """
-    Запускає тестування алгоритму US King
+    US_King Algorithm 
     """
     try:
-        #Need testing stocks
 
         file_service = FileService()
-        stocks = await file_service.read_data_from_csv("us_king_screener")
+        stocks = await file_service.read_data_from_csv(US_KING_STOCKS_FILE)
         
         if len(stocks) == 0:
             return {

@@ -501,15 +501,15 @@ def checkB13(
     underperforms_both = underperforms_x and underperforms_y
     
     # Debug logging
-    logger.info(f"B13 DEBUG - Data length: Stock={len(stock)}, Index={len(index)}")
-    logger.info(f"B13 DEBUG - Stock dates: today={stock[-1].date}, {input_B13_XX}d_ago={stock[-(input_B13_XX+1)].date}, {input_B13_YY}d_ago={stock[-(input_B13_YY+1)].date}")
-    logger.info(f"B13 DEBUG - Index dates: today={index[-1].date}, {input_B13_XX}d_ago={index[-(input_B13_XX+1)].date}, {input_B13_YY}d_ago={index[-(input_B13_YY+1)].date}")
-    logger.info(f"B13 DEBUG - Stock prices: today={s_today:.2f}, {input_B13_XX}d_ago={s_x_ago:.2f}, {input_B13_YY}d_ago={s_y_ago:.2f}")
-    logger.info(f"B13 DEBUG - Index prices: today={i_today:.2f}, {input_B13_XX}d_ago={i_x_ago:.2f}, {input_B13_YY}d_ago={i_y_ago:.2f}")
+    # logger.info(f"B13 DEBUG - Data length: Stock={len(stock)}, Index={len(index)}")
+    # logger.info(f"B13 DEBUG - Stock dates: today={stock[-1].date}, {input_B13_XX}d_ago={stock[-(input_B13_XX+1)].date}, {input_B13_YY}d_ago={stock[-(input_B13_YY+1)].date}")
+    # logger.info(f"B13 DEBUG - Index dates: today={index[-1].date}, {input_B13_XX}d_ago={index[-(input_B13_XX+1)].date}, {input_B13_YY}d_ago={index[-(input_B13_YY+1)].date}")
+    # logger.info(f"B13 DEBUG - Stock prices: today={s_today:.2f}, {input_B13_XX}d_ago={s_x_ago:.2f}, {input_B13_YY}d_ago={s_y_ago:.2f}")
+    # logger.info(f"B13 DEBUG - Index prices: today={i_today:.2f}, {input_B13_XX}d_ago={i_x_ago:.2f}, {input_B13_YY}d_ago={i_y_ago:.2f}")
     
-    logger.info(f"B13 - Stock {input_B13_XX}-day: {stock_ratio_x:.4f} {'<' if underperforms_x else '>='} Index: {index_ratio_x:.4f} {'(underperforms)' if underperforms_x else '(OK)'}")
-    logger.info(f"B13 - Stock {input_B13_YY}-day: {stock_ratio_y:.4f} {'<' if underperforms_y else '>='} Index: {index_ratio_y:.4f} {'(underperforms)' if underperforms_y else '(OK)'}")
-    logger.info(f"B13 - Final result: {'FALSE - Cancel buy (underperforms both periods)' if underperforms_both else 'TRUE - Allow buy (performing OK)'}")
+    # logger.info(f"B13 - Stock {input_B13_XX}-day: {stock_ratio_x} {'<' if underperforms_x else '>='} Index: {index_ratio_x} {'(underperforms)' if underperforms_x else '(OK)'}")
+    # logger.info(f"B13 - Stock {input_B13_YY}-day: {stock_ratio_y} {'<' if underperforms_y else '>='} Index: {index_ratio_y:} {'(underperforms)' if underperforms_y else '(OK)'}")
+    # logger.info(f"B13 - Final result: {'FALSE - Cancel buy (underperforms both periods)' if underperforms_both else 'TRUE - Allow buy (performing OK)'}")
 
     if underperforms_both:
         return False  # Cancel buy - stock underperforming
