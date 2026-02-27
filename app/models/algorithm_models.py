@@ -55,7 +55,7 @@ class AlgorithmParameters:
     # S1 parameters (stop loss)
     input_S1_atr_mult: float = 3.7
     input_S1_atr_period: int = 22
-    input_S1_hard_stop: float = 0.095  # 9.5% as decimal
+    input_S1_hard_stop: float = 0.30  # 30% — matches original: if riskFrac > 0.30
     input_S1_medium_risk: float = 0.20
     input_S1_medium_stop: float = 0.095
     input_S1_high_stop: float = 0.1425
@@ -97,12 +97,12 @@ class AlgorithmParameters:
     # S11 parameters
     input_S11_xx_days: int = 300
     input_S11_fib_level: float = 0.382
-    input_S11_yy_days: int = 2
+    input_S11_yy_days: int = 3  # original: streak_below >= 3
     
     # S12 parameters
     input_S12_xx_days: int = 240
     input_S12_fib_level: float = 0.236
-    input_S12_yy_days: int = 22
+    input_S12_yy_days: int = 23  # original: streak_below >= 23
     
     # S13 parameters
     input_S13_min_days: int = 238

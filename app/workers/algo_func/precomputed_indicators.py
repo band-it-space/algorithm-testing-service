@@ -147,13 +147,13 @@ class PrecomputedIndicators:
         self.rolling_max_high_5: Optional[np.ndarray] = None    # E5
         self.rolling_min_low_5: Optional[np.ndarray] = None     # E5
 
-        # === S6: days since most recent high in window ===
-        self.days_since_high_90: Optional[np.ndarray] = None
+        # === S6: new 90-day high flags ===
+        self.is_new_high_90: Optional[np.ndarray] = None
 
         # === Fibonacci ratio for S11/S12 ===
         self.fibo_ratio_250: Optional[np.ndarray] = None
-        self.fibo_above_382: Optional[np.ndarray] = None
-        self.fibo_above_236: Optional[np.ndarray] = None
+        self.fibo_below_382: Optional[np.ndarray] = None
+        self.fibo_below_236: Optional[np.ndarray] = None
         self.fibo_consec_s11: Optional[np.ndarray] = None
         self.fibo_consec_s12: Optional[np.ndarray] = None
 
@@ -227,8 +227,8 @@ class PrecomputedIndicators:
         # === B10 indicators ===
         self.rolling_min_b10 = self._rolling_min(self.lows, p.input_B10_low_window)
         
-        # === B11 indicators (lewis ATR) ===
-        self.lewis_atr_b11 = self._lewis_atr_full(p.input_B11_atr_len)
+        # === B11 indicators (Wilder ATR — matches original) ===
+        self.atr_b11 = self._atr_full(self.highs, self.lows, self.closes, p.input_B11_atr_len)
         
         # === B12 indicators ===
         self.sma_b12 = self._sma_full(self.closes, p.input_B12_long_ma)
@@ -251,7 +251,7 @@ class PrecomputedIndicators:
         self.bbw_b18 = self._calc_bbw(bb18_upper, bb18_lower, bb18_middle)
         
         # SMA of BBW for B18 condition 8 (matches original condition8_b18 which uses mean(recent_bbw[-Z:]))
-        b18_z = getattr(p, 'input_B18_Z', 10)
+        b18_z = getattr(p, 'input_B18_Z', 21)
         self.sma_bbw_b18 = self._sma_full(self.bbw_b18, b18_z)
         
         # B18 price BB (different period)
@@ -304,27 +304,33 @@ class PrecomputedIndicators:
         self.rolling_max_high_5 = self._rolling_max(self.highs, 5)
         self.rolling_min_low_5 = self._rolling_min(self.lows, 5)
 
-        # === S6: days since most recent high in window ===
-        self.days_since_high_90 = self._rolling_days_since_max(self.highs, s6_window)
+        # === S6: precompute "is new 90-day high" for each day ===
+        self.is_new_high_90 = np.zeros(self.n, dtype=bool)
+        for i in range(s6_window, self.n):
+            prev_max = np.max(self.highs[i - s6_window:i])
+            if self.highs[i] > prev_max:
+                self.is_new_high_90[i] = True
 
         # === Fibonacci ratio for S11/S12 ===
+        # Original formula: close < bottom + level * (top - bottom)
+        # Equivalent to: (close - bottom) / (top - bottom) < level
         with np.errstate(divide='ignore', invalid='ignore'):
             range_250 = self.rolling_max_250 - self.rolling_min_250
             self.fibo_ratio_250 = np.where(
                 range_250 > 0,
-                (self.rolling_max_250 - self.closes) / range_250,
+                (self.closes - self.rolling_min_250) / range_250,
                 np.nan
             )
 
         s11_level = getattr(p, 'input_S11_fib_level', 0.382)
         s12_level = getattr(p, 'input_S12_fib_level', 0.236)
-        s11_yy = getattr(p, 'input_S11_yy_days', 2)
-        s12_yy = getattr(p, 'input_S12_yy_days', 22)
+        s11_yy = getattr(p, 'input_S11_yy_days', 3)
+        s12_yy = getattr(p, 'input_S12_yy_days', 23)
 
-        self.fibo_above_382 = ~np.isnan(self.fibo_ratio_250) & (self.fibo_ratio_250 > s11_level)
-        self.fibo_above_236 = ~np.isnan(self.fibo_ratio_250) & (self.fibo_ratio_250 > s12_level)
-        self.fibo_consec_s11 = self._rolling_all_true(self.fibo_above_382, s11_yy)
-        self.fibo_consec_s12 = self._rolling_all_true(self.fibo_above_236, s12_yy)
+        self.fibo_below_382 = ~np.isnan(self.fibo_ratio_250) & (self.fibo_ratio_250 < s11_level)
+        self.fibo_below_236 = ~np.isnan(self.fibo_ratio_250) & (self.fibo_ratio_250 < s12_level)
+        self.fibo_consec_s11 = self._rolling_all_true(self.fibo_below_382, s11_yy)
+        self.fibo_consec_s12 = self._rolling_all_true(self.fibo_below_236, s12_yy)
 
         # === S14 relative performance ===
         s14_horizons = getattr(p, 'input_S14_horizons', [35, 70, 105])
@@ -487,16 +493,16 @@ class PrecomputedIndicators:
         """Calculate rolling minimum with offset (for B8 past range).
         
         Matches original checkB8 logic:
-            lows[-past_low : -recent_low - 1]
+            pastRange = lows[-270:-46]
         which at index idx translates to:
-            lows[idx - past_low + 1 : idx - recent_low]
+            lows[idx - past_low + 1 : idx - recent_low + 1]
         where period = past_low - recent_low, offset = recent_low.
         """
         n = len(values)
         result = np.full(n, np.nan)
         
         for i in range(offset + period - 1, n):
-            window = values[i - offset - period + 1:i - offset]
+            window = values[i - offset - period + 1:i - offset + 1]
             if len(window) > 0:
                 result[i] = np.min(window)
         
@@ -934,9 +940,9 @@ class PrecomputedIndicators:
         max_high = np.max(window_highs)
         min_low = np.min(window_lows)
         
-        # Find LAST index of max/min (searching from end)
-        high_index = len(window_highs) - 1 - np.argmax(window_highs[::-1] == max_high)
-        low_index = len(window_lows) - 1 - np.argmax(window_lows[::-1] == min_low)
+        # Find FIRST index of max/min (matching original .index() behavior)
+        high_index = np.argmax(window_highs)
+        low_index = np.argmin(window_lows)
         
         mid = (max_high + min_low) / 2
         
@@ -949,8 +955,7 @@ class PrecomputedIndicators:
     def get_b10_condition(self, idx: int) -> bool:
         """Check B10 condition at index.
         
-        Original logic: Returns True if minLow of low_window is NOT in the last prox_days lows.
-        This checks that the lowest point is not too recent.
+        Original logic: first occurrence of min low, daysSinceLow >= prox_days.
         """
         if idx >= self.n:
             return False
@@ -967,16 +972,17 @@ class PrecomputedIndicators:
         window_lows = self.lows[start_idx:idx + 1]
         
         min_low = np.min(window_lows)
+        # First occurrence (matching original .index())
+        min_index = np.argmin(window_lows)
+        days_since_low = len(window_lows) - 1 - min_index
         
-        # Check if minLow is NOT in the last prox_days
-        recent_lows = window_lows[-prox_days:]
-        return min_low not in recent_lows
+        return days_since_low >= prox_days
     
     def get_b11_condition(self, idx: int) -> bool:
         """Check B11 condition at index.
         
-        Original logic uses lewis_atr (starts from 0 and smooths).
-        Returns NOT (current_atr > atr_threshold * max(prev_history))
+        Original uses standard Wilder ATR (with SMA warmup).
+        Returns NOT (current_atr > atr_threshold * max(last_history))
         i.e., True if current ATR is not too high compared to recent history.
         """
         if idx >= self.n:
@@ -986,34 +992,35 @@ class PrecomputedIndicators:
         history = p.input_B11_history
         atr_threshold = p.input_B11_atr_threshold
         
-        # Need enough history + current
+        # Need enough history
         if idx < history:
             return False
         
-        current_atr = self.lewis_atr_b11[idx]
+        current_atr = self.atr_b11[idx]
         if np.isnan(current_atr):
             return False
         
-        # Get previous history window (exclude current)
-        prev_window = self.lewis_atr_b11[idx - history:idx]
+        # Get last 'history' ATR values (matching original: atr_vals[-126:])
+        prev_window = self.atr_b11[idx - history + 1:idx + 1]
         prev_window = prev_window[~np.isnan(prev_window)]
         
         if len(prev_window) < history:
             return False
         
-        max_prev = np.max(prev_window)
+        max_atr = np.max(prev_window)
         
-        # Return NOT (current > threshold * max_prev)
-        return not (current_atr > atr_threshold * max_prev)
+        # Return NOT (current > threshold * max)
+        return not (current_atr > atr_threshold * max_atr)
     
     def get_b12_condition(self, idx: int) -> bool:
         """Check B12 condition at index.
         
         Original logic:
-        1. Get SMA now and SMA 50 days ago
-        2. sma_growth = (sma_now / sma_past) - 1.0
-        3. dev = (high / sma_now) - 1.0
-        4. Returns NOT ((sma_growth > growth) AND (dev > deviation))
+        1. smaNow = average(ohlcv[targetIndex-150 : targetIndex])  — excludes current bar
+        2. smaPast = average(ohlcv[targetIndex-50-150 : targetIndex-50])
+        3. smaGrowth = (smaNow - smaPast) / smaPast
+        4. dev = (todayHigh - smaNow) / smaNow
+        5. Returns NOT ((smaGrowth >= growth) AND (dev >= deviation))
         """
         if idx >= self.n:
             return False
@@ -1024,22 +1031,25 @@ class PrecomputedIndicators:
         deviation = p.input_B12_deviation
         days = 50  # Hardcoded in original
         
-        # Need enough data for SMA + 50 days comparison
-        if idx < long_ma + days - 1:
+        # Need enough data: targetIndex >= 150 + 50
+        if idx < long_ma + days:
             return False
         
-        sma_now = self.sma_b12[idx]
-        sma_past_idx = idx - days
+        # Original SMA excludes current bar: sma_b12[idx-1] corresponds to
+        # SMA of closes[idx-long_ma : idx] which excludes closes[idx]
+        sma_now = self.sma_b12[idx - 1]
+        sma_past_idx = idx - 1 - days
         sma_past = self.sma_b12[sma_past_idx] if sma_past_idx >= 0 else np.nan
         
         if np.isnan(sma_now) or np.isnan(sma_past) or sma_now == 0 or sma_past == 0:
             return False
         
-        sma_growth = (sma_now / sma_past) - 1.0
-        dev = (self.highs[idx] / sma_now) - 1.0
+        sma_growth = (sma_now - sma_past) / sma_past
+        # Original uses todayHigh, not close
+        dev = (self.highs[idx] - sma_now) / sma_now
         
-        # Return NOT ((sma_growth > growth) AND (dev > deviation))
-        return not ((sma_growth > growth) and (dev > deviation))
+        # Original uses >= (not >)
+        return not ((sma_growth >= growth) and (dev >= deviation))
     
     def get_b13_condition(self, idx: int) -> bool:
         """Check B13 condition at index.
@@ -1126,22 +1136,28 @@ class PrecomputedIndicators:
         cond7 = last_close > high_250 * 0.75
         
         # Condition 8: BBW + price above BB (condition8_b18)
-        b18_z = getattr(p, 'input_B18_Z', 10)
-        if idx < p.input_B18_history + b18_z:
+        # Original: avgBBW21 = mean(bbw[-21:]), avgBBW82 = mean(bbw[-82:])
+        # cond8 = (avgBBW21 < 0.22 * avgBBW82) and (lastClose > lastBB21['upper'])
+        b18_z = getattr(p, 'input_B18_Z', 21)
+        b18_y = p.input_B18_history  # 82
+        if idx < max(b18_z, b18_y):
             return False
         
-        # Use SMA of last Z BBW values (matches original condition8_b18)
-        bbw_sma_now = self.sma_bbw_b18[idx]
-        bbw_ago_idx = idx - p.input_B18_history
-        
-        if bbw_ago_idx < 0 or np.isnan(bbw_sma_now):
+        # Mean of last Z BBW values
+        bbw_z_window = self.bbw_b18[idx - b18_z + 1:idx + 1]
+        bbw_z_valid = bbw_z_window[~np.isnan(bbw_z_window)]
+        if len(bbw_z_valid) == 0:
             return False
+        avgBBW_Z = np.mean(bbw_z_valid)
         
-        bbw_ago = self.bbw_b18[bbw_ago_idx]
-        if np.isnan(bbw_ago):
+        # Mean of last Y BBW values
+        bbw_y_window = self.bbw_b18[idx - b18_y + 1:idx + 1]
+        bbw_y_valid = bbw_y_window[~np.isnan(bbw_y_window)]
+        if len(bbw_y_valid) == 0:
             return False
+        avgBBW_Y = np.mean(bbw_y_valid)
         
-        cond_bbw = bbw_sma_now < bbw_ago * p.input_B18_bbw_ratio
+        cond_bbw = avgBBW_Z < p.input_B18_bbw_ratio * avgBBW_Y
         
         bb_upper = self.bb_b18_upper[idx]
         if np.isnan(bb_upper):
@@ -1168,11 +1184,11 @@ class PrecomputedIndicators:
         p = self.params
         
         factor = p.input_S1_atr_mult
-        atr_period = getattr(p, 'input_S1_atr_period', 14)
+        atr_period = getattr(p, 'input_S1_atr_period', 22)
         hard_stop = p.input_S1_hard_stop
-        medium_risk = getattr(p, 'input_S1_medium_risk', 0.12)
-        medium_stop = getattr(p, 'input_S1_medium_stop', 0.10)
-        high_stop = getattr(p, 'input_S1_high_stop', 0.08)
+        medium_risk = getattr(p, 'input_S1_medium_risk', 0.20)
+        medium_stop = getattr(p, 'input_S1_medium_stop', 0.095)
+        high_stop = getattr(p, 'input_S1_high_stop', 0.1425)
         
         close = entry_close if entry_close is not None else self.closes[idx]
         if close <= 0:
@@ -1303,8 +1319,6 @@ class PrecomputedIndicators:
             is_key_day = True
         elif days_since_buy > initial_days and (days_since_buy - initial_days + 1) % step_days == 0:
             is_key_day = True
-        elif days_since_buy > initial_days:
-            return current_close < stop_loss, stop_loss
 
         if not is_key_day:
             return False, stop_loss
@@ -1322,11 +1336,16 @@ class PrecomputedIndicators:
         return exit_signal, new_stop_loss
 
     def get_s6_condition(self, idx: int, buy_idx: int) -> bool:
-        """S6: Days since most recent 90-day high exceeds threshold."""
+        """S6: No new 90-day high in the last 76 days.
+        
+        Original: checks if there was ANY new 90-day high in the last 76 days.
+        If no new high found, triggers sell.
+        """
         p = self.params
         high_window = getattr(p, 'input_S6_high_window', 90)
+        days_threshold = p.input_S6_days_threshold
 
-        if buy_idx < 0 or idx < high_window - 1:
+        if buy_idx < 0 or idx < high_window:
             return False
         if self.n < high_window + 10:
             return False
@@ -1335,14 +1354,22 @@ class PrecomputedIndicators:
         if days_since_buy < p.input_S6_min_days:
             return False
 
-        days_since_high = self.days_since_high_90[idx]
-        if np.isnan(days_since_high):
+        # Check if any day in [idx - days_threshold .. idx] had a new 90-day high
+        start = max(idx - days_threshold, high_window)
+        end = idx
+        
+        if start > end:
             return False
 
-        return int(days_since_high) >= p.input_S6_days_threshold
+        had_new_high = np.any(self.is_new_high_90[start:end + 1])
+
+        return not had_new_high
 
     def get_s7_condition(self, idx: int) -> bool:
-        """S7: Two consecutive large bearish bodies > body_mult * ATR(22)."""
+        """S7: Two consecutive large bearish bodies > body_mult * ATR(22).
+        
+        Original uses SMA-based ATR (calc_atr22_series = sma(trs, 22)).
+        """
         p = self.params
         atr_period = getattr(p, 'input_S7_atr_period', 22)
 
@@ -1351,8 +1378,9 @@ class PrecomputedIndicators:
         if self.n < atr_period + 2:
             return False
 
-        atr_prev = self.atr_s7[idx - 1]
-        atr_last = self.atr_s7[idx]
+        # Use SMA-based ATR (matches original calc_atr22_series)
+        atr_prev = self.sma_tr_22[idx - 1]
+        atr_last = self.sma_tr_22[idx]
 
         if np.isnan(atr_prev) or np.isnan(atr_last):
             return False
@@ -1542,11 +1570,12 @@ class PrecomputedIndicators:
         ret_yy = last_close / base_close - 1
         big_drop = ret_yy < -s16_xx / 100.0
 
-        atr_now = self.atr_s7[idx]
+        # Use SMA-based ATR (matches original sma(trs, 22))
+        atr_now = self.sma_tr_22[idx]
         atr_past_idx = idx - s16_atr_day
         if atr_past_idx < 0:
             return False
-        atr_past = self.atr_s7[atr_past_idx]
+        atr_past = self.sma_tr_22[atr_past_idx]
 
         if np.isnan(atr_now) or np.isnan(atr_past) or atr_past <= 0:
             return False

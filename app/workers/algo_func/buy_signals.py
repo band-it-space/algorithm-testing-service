@@ -76,9 +76,9 @@ def condition8_b18(closes: list[float], params: AlgorithmParameters = None) -> b
     input_BBW_SD = 2.0  
     input_B18_Z = params.input_B18_Z  # was 21
     input_B18_Y = params.input_B18_history  # was 82
-    input_B18_X = params.input_B18_bbw_ratio * 100  # was 15.0
+    input_B18_X = params.input_B18_bbw_ratio  # was 0.22
 
-    if len(closes) < input_BBW_len + input_B18_Z + input_B18_Y:
+    if len(closes) < input_BBW_len + max(input_B18_Z, input_B18_Y):
         return False
 
     bb = bollinger_bands(closes, input_BBW_len, input_BBW_SD)
@@ -93,20 +93,15 @@ def condition8_b18(closes: list[float], params: AlgorithmParameters = None) -> b
         bbw.append(width_pct)
 
     recent_bbw = [x for x in bbw if x is not None]
-    if len(recent_bbw) < input_B18_Z + input_B18_Y:
+    if len(recent_bbw) < max(input_B18_Z, input_B18_Y):
         return False
 
-    bbw_sma_now = mean(recent_bbw[-input_B18_Z:])
+    # Original: avgBBW21 = mean(bbw[-21:]), avgBBW82 = mean(bbw[-82:])
+    avgBBW_Z = mean(recent_bbw[-input_B18_Z:])
+    avgBBW_Y = mean(recent_bbw[-input_B18_Y:])
 
-    try:
-        bbw_y_ago = recent_bbw[-1 - input_B18_Y]
-    except IndexError:
-        return False
-
-    if bbw_y_ago is None:
-        return False
-
-    cond_bbw = bbw_sma_now < bbw_y_ago * (input_B18_X / 100.0)
+    # Original: cond8 = (avgBBW21 < 0.22 * avgBBW82) and (lastClose > lastBB21['upper'])
+    cond_bbw = avgBBW_Z < input_B18_X * avgBBW_Y
 
     bb_price = bollinger_bands(closes, input_B18_Z, 2.0)
     last_bb_price = bb_price[-1]
@@ -273,9 +268,8 @@ def checkB8(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
 
     recent_low = min(lows[-recent_low_period:])
     
-    past_end = -recent_low_period - 1
-    past_start = -past_low_period
-    pastRange = lows[past_start:past_end]
+    # Original: pastRange = lows[-270:-46]
+    pastRange = lows[-past_low_period:-recent_low_period]
     pastMinRange = min(pastRange) if pastRange else float('inf')
 
     return recent_low > pastMinRange
@@ -300,9 +294,9 @@ def checkB9(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
     maxHigh = max(highs)
     minLow = min(lows)
 
-    # Get the last occurrence of max and min values
-    highIndex = max(i for i, v in enumerate(highs) if v == maxHigh)
-    lowIndex = max(i for i, v in enumerate(lows) if v == minLow)
+    # Use first occurrence (matching original .index() behavior)
+    highIndex = highs.index(maxHigh)
+    lowIndex = lows.index(minLow)
 
     mid = (maxHigh + minLow) / 2
 
@@ -326,8 +320,11 @@ def checkB10(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
     lows = [bar.low for bar in last_n]
 
     minLow = min(lows)
+    # Original uses .index() — first occurrence
+    minIndex = lows.index(minLow)
+    daysSinceLow = len(last_n) - 1 - minIndex
 
-    return minLow not in lows[-prox_days:]
+    return daysSinceLow >= prox_days
 
 
 def lewis_atr(highs: List[float], lows: List[float], closes: List[float], period: int) -> List[Optional[float]]:
@@ -358,34 +355,27 @@ def checkB11(ohlcv: List["OHLCV"], params: AlgorithmParameters = None) -> bool:
     
     atr_len = params.input_B11_atr_len  # was 22
     history = params.input_B11_history  # was 126
-    atr_threshold = params.input_B11_atr_threshold  # was 0.87 (now 0.8 in original)
+    atr_threshold = params.input_B11_atr_threshold  # was 0.87
     
-    ohlcv = sorted(ohlcv, key=lambda x: to_ts(x.date))
-    n = len(ohlcv)
-
-    min_required = history + atr_len + 1
-    if n < min_required:
+    if len(ohlcv) < history + atr_len:
         return False
 
     highs = [b.high for b in ohlcv]
     lows  = [b.low for b in ohlcv]
     closes= [b.close for b in ohlcv]
 
-    atr_vals = lewis_atr(highs, lows, closes, atr_len)
+    # Use standard Wilder ATR (with SMA warmup) matching original
+    atr_vals = wilder_atr(highs, lows, closes, atr_len)
 
-    current = atr_vals[-1]
-    if current is None:
-        return False
-    
-    prev_window = atr_vals[-(history + 1):-1]
-    prev_window = [x for x in prev_window if x is not None]
-    if len(prev_window) < history:
+    if len(atr_vals) < history:
         return False
 
-    max_prev = max(prev_window)
+    currentATR = atr_vals[-1]
 
-    # MC logic: if current > max_prev * threshold => cancel => return False
-    return not (current > atr_threshold * max_prev)
+    last126 = atr_vals[-history:]
+    maxATR = max(last126)
+
+    return not (currentATR > atr_threshold * maxATR)
 
 
 def checkB12(
@@ -402,23 +392,27 @@ def checkB12(
 
     closes = [b.close for b in ohlcv]
     n = len(closes)
-    if n < long_ma + days:
+    # Original: targetIndex < 150 + 50
+    if n < long_ma + days + 1:
         return False
 
-    sma_vals = sma(closes, long_ma)
-    warmup = long_ma - 1
-    if not sma_vals or len(sma_vals) != n - warmup:
+    # Original: smaNow = average(ohlcv[targetIndex - 150 : targetIndex])
+    # This EXCLUDES the current bar (targetIndex is the last bar)
+    target_idx = n - 1
+    sma_now = sum(closes[target_idx - long_ma:target_idx]) / long_ma
+    sma_past = sum(closes[target_idx - days - long_ma:target_idx - days]) / long_ma
+
+    if sma_now == 0 or sma_past == 0:
         return False
 
-    sma_now = sma_vals[-1]
-    sma_past = sma_vals[-days - 1]
-    if sma_now in (None, 0) or sma_past in (None, 0):
-        return False
+    sma_growth = (sma_now - sma_past) / sma_past
+    
+    # Original uses todayHigh, not close
+    today_high = ohlcv[-1].high
+    dev = (today_high - sma_now) / sma_now
 
-    sma_growth = (sma_now / sma_past) - 1.0
-    dev = (ohlcv[-1].high / sma_now) - 1.0
-
-    return not ((sma_growth > growth) and (dev > deviation))
+    # Original: cancel = smaGrowth >= growth and deviation >= deviation (uses >=)
+    return not ((sma_growth >= growth) and (dev >= deviation))
 
 
 def checkB13(
@@ -435,33 +429,36 @@ def checkB13(
     if not ohlcvStock or not ohlcvIndex:
         return False
     
-    stock = sorted(ohlcvStock, key=lambda x: to_ts(x.date))
-    index = sorted(ohlcvIndex, key=lambda x: to_ts(x.date))
+    # Original aligns stock and index by matching dates
+    idxCloseByDate = {bar.date: bar.close for bar in ohlcvIndex}
+    aligned = [{'s': bar.close, 'i': idxCloseByDate[bar.date]} 
+               for bar in ohlcvStock if bar.date in idxCloseByDate]
+
+    if not aligned:
+        return False
 
     max_period = max(input_B13_XX, input_B13_YY)
-
-    if len(stock) <= max_period or len(index) <= max_period:
+    if len(aligned) < max_period + 1:
         return False
 
-    s_today = stock[-1].close
-    i_today = index[-1].close
+    underperformAll = True
+    for period in [input_B13_XX, input_B13_YY]:
+        if len(aligned) < period + 1:
+            return False
 
-    s_x_ago = stock[-input_B13_XX - 1].close
-    i_x_ago = index[-input_B13_XX - 1].close
+        sStart = aligned[len(aligned) - period - 1]['s']
+        sEnd = aligned[len(aligned) - 1]['s']
+        iStart = aligned[len(aligned) - period - 1]['i']
+        iEnd = aligned[len(aligned) - 1]['i']
 
-    s_y_ago = stock[-input_B13_YY - 1].close
-    i_y_ago = index[-input_B13_YY - 1].close
+        sRet = (sEnd - sStart) / sStart if sStart != 0 else 0
+        iRet = (iEnd - iStart) / iStart if iStart != 0 else 0
 
-    stock_ratio_x = s_today / s_x_ago
-    index_ratio_x = i_today / i_x_ago
+        if not (sRet < iRet):
+            underperformAll = False
+            break
 
-    stock_ratio_y = s_today / s_y_ago
-    index_ratio_y = i_today / i_y_ago
-
-    if (stock_ratio_x < index_ratio_x) and (stock_ratio_y < index_ratio_y):
-        return False
-    else: 
-        return True
+    return not underperformAll
 
 
 def checkB18(ohlcv: List[OHLCV], targetDate: str, params: AlgorithmParameters = None) -> bool:

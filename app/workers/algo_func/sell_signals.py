@@ -182,8 +182,6 @@ def s5(ohlcv, buy_date, buy_price, stop_loss, trade_date: str, params: Algorithm
         is_key_day = True
     elif days_since_buy > initial_days and (days_since_buy - initial_days + 1) % step_days == 0:
         is_key_day = True
-    elif days_since_buy > initial_days:
-        return current_close < stop_loss, stop_loss
 
     if not is_key_day:
         return False, stop_loss
@@ -267,8 +265,9 @@ def fibo_exit_stop(
         if not np.isfinite(close_i):
             return False
 
-        ratio = (high250 - close_i) / (high250 - low250)
-        return ratio > level
+        # Original formula: close < bottom + level * (top - bottom)
+        fibo_level = low250 + level * (high250 - low250)
+        return close_i < fibo_level
 
     true_count = 0
     for offset in range(yy_days):
@@ -317,25 +316,28 @@ def s6(ohlcv, buy_date, trade_date, params: AlgorithmParameters = None):
     if days_since_buy < min_days:
         return False
 
-    if last_idx < high_window - 1:
+    if last_idx < high_window:
         return False
 
     highs = [num(d.high, "high") for d in data]
 
-    start_window = last_idx - high_window + 1
-    window_highs = highs[start_window:last_idx + 1]
-    high_n = max(window_highs)
+    # Original logic: check if there was ANY new 90-day high in the last 76 days
+    # For each day t in [start, end], check if highs[t] > max(highs[t-90..t-1])
+    start = max(last_idx - days_threshold, 0)
+    start = max(start, high_window)
+    end = last_idx
+    
+    if start > end:
+        return False
 
-    last_high_idx = max(
-        i for i in range(start_window, last_idx + 1)
-        if highs[i] == high_n
-    )
-    days_since_high = last_idx - last_high_idx
+    had_new_high = False
+    for t in range(start, end + 1):
+        prev_max = max(highs[t - high_window:t])
+        if highs[t] > prev_max:
+            had_new_high = True
+            break
 
-    if days_since_high >= days_threshold:
-        return True
-
-    return False
+    return not had_new_high
 
 
 def s7(ohlcv, buy_date, buy_price, params: AlgorithmParameters = None):
@@ -350,7 +352,9 @@ def s7(ohlcv, buy_date, buy_price, params: AlgorithmParameters = None):
     if n < atr_period + 2:
         return False
 
-    atr22_series = atr(data, atr_period)
+    # Original uses SMA-based ATR (calc_atr22_series), not Wilder's
+    trs = calc_tr_series(data)
+    atr22_series = sma(trs, atr_period)
     if len(atr22_series) < 2:
         return False
 
@@ -654,8 +658,9 @@ def s16(
     ret_yy = last_close / base_close - 1
     big_drop = ret_yy < -s16_xx / 100.0
 
+    # Original uses SMA-based ATR, not Wilder's
     trs = calc_tr_series(data)
-    atr22 = atr(data, atr_period)
+    atr22 = sma(trs, atr_period)
     if len(atr22) < s16_atr_day + 1:
         return False
 
