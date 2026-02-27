@@ -1,0 +1,29 @@
+Metric,Value1,Value2
+,Original,Optimized
+Total Trades,357,357
+Open Trades,11,11
+Unique Stocks,30,30
+Winning Trades,171,171
+Losing Trades,180,180
+Win Rate (%),47.9,47.9
+Avg Winning Trade ($),3249.08,3249.08
+Avg Losing Trade ($),-737.81,-737.81
+Win/Loss Ratio,4.4,4.4
+Total Profit ($),422787.0,422787.0
+,,
+Comparison,Count,% of Matched
+Matched Trades,368,
+Original Only Trades,0,
+Optimized Only Trades,0,
+,,
+Buy Match - Exact,368,100.0%
+Buy Match - Close,0,0.0%
+Buy Match - Different,0,0.0%
+,,
+Sell Match - Exact,357,97.0%
+Sell Match - Close (±2d),0,0.0%
+Sell Match - Close (±5d),0,0.0%
+Sell Match - Different,0,0.0%
+,,
+Direction - Same,368,100.0%
+Direction - Different,0,0.0%

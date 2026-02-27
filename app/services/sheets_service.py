@@ -11,7 +11,7 @@ Provides rate-limited access to Google Sheets API with:
 import os
 import time
 import logging
-from typing import List, Dict, Any, Optional
+from typing import Any
 from collections import deque
 from functools import wraps
 import math
@@ -46,7 +46,7 @@ class RateLimiter:
     ):
         self.max_requests = max_requests
         self.window_seconds = window_seconds
-        self.requests: deque = deque()
+        self.requests: deque[float] = deque()
     
     def acquire(self) -> float:
         """
@@ -167,8 +167,8 @@ class GoogleSheetsService:
     
     def __init__(
         self,
-        credentials_path: Optional[str] = None,
-        spreadsheet_id: Optional[str] = None,
+        credentials_path: str | None = None,
+        spreadsheet_id: str | None = None,
         default_sheet: str = "Sheet1"
     ):
         self.credentials_path = credentials_path
@@ -213,8 +213,8 @@ class GoogleSheetsService:
     def read_values(
         self, 
         range_name: str,
-        sheet_name: Optional[str] = None
-    ) -> List[List[Any]]:
+        sheet_name: str | None = None
+    ) -> list[list[Any]]:
         """
         Read values from a range in the spreadsheet.
 
@@ -256,8 +256,8 @@ class GoogleSheetsService:
     def write_values(
         self,
         range_name: str,
-        values: List[List[Any]],
-        sheet_name: Optional[str] = None
+        values: list[list[Any]],
+        sheet_name: str | None = None
     ) -> int:
         """
         Write values to a range in the spreadsheet.
@@ -303,8 +303,8 @@ class GoogleSheetsService:
     @timed("sheets_append_rows")
     def append_rows(
         self,
-        values: List[List[Any]],
-        sheet_name: Optional[str] = None
+        values: list[list[Any]],
+        sheet_name: str | None = None
     ) -> int:
         """
         Append rows to the end of the sheet.
@@ -348,8 +348,8 @@ class GoogleSheetsService:
     @timed("sheets_batch_append")
     def batch_append_rows(
         self,
-        values: List[List[Any]],
-        sheet_name: Optional[str] = None
+        values: list[list[Any]],
+        sheet_name: str | None = None
     ) -> int:
         """
         Append rows in batches to handle large datasets.
@@ -386,8 +386,8 @@ class GoogleSheetsService:
     @timed("sheets_batch_update")
     def batch_update(
         self,
-        results: List[Dict[str, Any]],
-        sheet_name: Optional[str] = None,
+        results: list[dict[str, Any]],
+        sheet_name: str | None = None,
         include_header: bool = True
     ) -> int:
         """
@@ -419,7 +419,7 @@ class GoogleSheetsService:
         
         return self.batch_append_rows(values, sheet_name)
     
-    def estimate_payload_size(self, values: List[List[Any]]) -> int:
+    def estimate_payload_size(self, values: list[list[Any]]) -> int:
         """
         Estimate the payload size for a values array.
 
@@ -432,7 +432,7 @@ class GoogleSheetsService:
         import json
         return len(json.dumps(values).encode('utf-8'))
     
-    def get_api_stats(self) -> Dict[str, Any]:
+    def get_api_stats(self) -> dict[str, Any]:
         """Get API usage statistics."""
         return {
             "requests_remaining": self.rate_limiter.get_remaining(),
@@ -446,7 +446,7 @@ class GoogleSheetsService:
 
 
 # Configuration from environment
-CREDENTIALS_PATH = os.getenv('GOOGLE_SHEETS_CREDENTIALS', 'credentials/google_sheets.json')
+CREDENTIALS_PATH = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH', 'credentials/google_sheets.json')
 DEFAULT_SPREADSHEET_ID = os.getenv('GOOGLE_SHEETS_SPREADSHEET_ID', '')
 INPUT_SHEET_NAME = os.getenv('INPUT_SHEET_NAME', 'Parameter Tuning')
 OUTPUT_SHEET_NAME = os.getenv('OUTPUT_SHEET_NAME', 'Automated Results')
@@ -460,7 +460,7 @@ class SheetsService:
     Provides the original API expected by controllers and services.
     """
     
-    def __init__(self, sheet_id: Optional[str] = None):
+    def __init__(self, sheet_id: str | None = None):
         """Initialize SheetsService."""
         self.sheet_id = sheet_id or DEFAULT_SPREADSHEET_ID
         self._service = None
@@ -511,7 +511,7 @@ class SheetsService:
         # For service accounts, read permission typically implies write
         return self.check_read_permission()
     
-    def get_sheet_config(self) -> Dict[str, Any]:
+    def get_sheet_config(self) -> dict[str, Any]:
         """Get sheet configuration."""
         return {
             "spreadsheet_id": self.sheet_id,
@@ -519,12 +519,13 @@ class SheetsService:
             "credentials_exist": os.path.exists(CREDENTIALS_PATH)
         }
     
-    @staticmethod
+    @classmethod
     def write_genome_results(
+        cls,
         sheet_id: str,
-        data: List[Dict[str, Any]],
+        data: list[dict[str, Any]],
         worksheet_name: str = OUTPUT_SHEET_NAME,
-        fieldnames: Optional[List[str]] = None
+        fieldnames: list[str] | None = None
     ) -> bool:
         """
         Write genome results to a Google Sheet.
@@ -591,7 +592,7 @@ class SheetsService:
             return False
 
 
-def read_parameter_ranges_from_sheets(sheet_id: Optional[str] = None) -> List[Dict[str, Any]]:
+def read_parameter_ranges_from_sheets(sheet_id: str | None = None) -> list[dict[str, Any]]:
     """
     Read parameter ranges from Google Sheets.
     

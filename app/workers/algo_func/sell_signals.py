@@ -1,12 +1,12 @@
-import numpy as np
-from datetime import datetime
-from app.workers.algo_func.get_code_energy import calculate_energy_indicators_last_16_days
-import pandas as pd
-from dataclasses import dataclass
-from typing import List, Optional
 import logging
+from dataclasses import dataclass
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
 
 from app.models.algorithm_models import AlgorithmParameters
+from app.workers.algo_func.get_code_energy import calculate_energy_indicators_last_16_days
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class OHLCV:
     high: float
     low: float
     close: float
-    volume: Optional[float] = None
+    volume: float | None = None
 
 def calc_tr_series(data):
     trs = []
@@ -37,7 +37,7 @@ def sma(values, period):
         result.append(sum(values[i - period + 1 : i + 1]) / period)
     return result
 
-def atr(ohlcv: List[OHLCV], period: int):
+def atr(ohlcv: list[OHLCV], period: int):
     if len(ohlcv) < period + 1:
         return []  
     trs = []

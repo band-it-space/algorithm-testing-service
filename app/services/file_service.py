@@ -11,7 +11,7 @@ import csv
 import os
 import json
 import logging
-from typing import List, Dict, Any, Optional, Iterator
+from typing import Any
 from pathlib import Path
 from contextlib import contextmanager
 import tempfile
@@ -49,14 +49,14 @@ class BufferedCSVWriter:
         self, 
         filepath: str, 
         buffer_size: int = DEFAULT_BUFFER_SIZE,
-        fieldnames: Optional[List[str]] = None,
+        fieldnames: list[str] | None = None,
         append: bool = True
     ):
         self.filepath = filepath
         self.buffer_size = buffer_size
         self.fieldnames = fieldnames
         self.append = append
-        self.buffer: List[Dict[str, Any]] = []
+        self.buffer: list[dict[str, Any]] = []
         self._file_handle = None
         self._writer = None
         self._rows_written = 0
@@ -84,7 +84,7 @@ class BufferedCSVWriter:
         elif mode == 'a':
             logger.debug(f"Appending to existing CSV file: {self.filepath}")
     
-    def write_row(self, row: Dict[str, Any]) -> None:
+    def write_row(self, row: dict[str, Any]) -> None:
         """
         Add a row to the buffer.
         
@@ -101,7 +101,7 @@ class BufferedCSVWriter:
         if len(self.buffer) >= self.buffer_size:
             self.flush()
     
-    def write_rows(self, rows: List[Dict[str, Any]]) -> None:
+    def write_rows(self, rows: list[dict[str, Any]]) -> None:
         """Add multiple rows to the buffer."""
         for row in rows:
             self.write_row(row)
@@ -133,7 +133,7 @@ class BufferedCSVWriter:
         )
     
     @property
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         """Get write statistics."""
         return {
             "rows_written": self._rows_written,
@@ -145,8 +145,8 @@ class BufferedCSVWriter:
 @timed("atomic_csv_write")
 def write_csv_atomic(
     filepath: str, 
-    data: List[Dict[str, Any]], 
-    fieldnames: Optional[List[str]] = None
+    data: list[dict[str, Any]], 
+    fieldnames: list[str] | None = None
 ) -> bool:
     """
     Write data to CSV atomically using temp file + rename.
@@ -187,7 +187,7 @@ def write_csv_atomic(
         return False
 
 
-def read_csv_to_dicts(filepath: str) -> List[Dict[str, Any]]:
+def read_csv_to_dicts(filepath: str) -> list[dict[str, Any]]:
     """
     Read CSV file into list of dictionaries.
     
@@ -241,14 +241,14 @@ class DualStorageManager:
     def __init__(
         self,
         csv_path: str = DEFAULT_CSV_FILENAME,
-        sheets_service: Optional[Any] = None,
+        sheets_service: Any | None = None,
         buffer_size: int = DEFAULT_BUFFER_SIZE
     ):
         self.csv_path = csv_path
         self.sheets_service = sheets_service
         self.buffer_size = buffer_size
-        self._csv_writer: Optional[BufferedCSVWriter] = None
-        self._pending_sheets_rows: List[Dict[str, Any]] = []
+        self._csv_writer: BufferedCSVWriter | None = None
+        self._pending_sheets_rows: list[dict[str, Any]] = []
         self._sheets_batch_size = 100
     
     def __enter__(self) -> 'DualStorageManager':
@@ -258,7 +258,7 @@ class DualStorageManager:
         self.close()
     
     @timed("dual_storage_save_row")
-    def save_row(self, row: Dict[str, Any]) -> None:
+    def save_row(self, row: dict[str, Any]) -> None:
         """
         Save a single result row to both storages.
         
@@ -282,7 +282,7 @@ class DualStorageManager:
             if len(self._pending_sheets_rows) >= self._sheets_batch_size:
                 self._flush_to_sheets()
     
-    def save_rows(self, rows: List[Dict[str, Any]]) -> None:
+    def save_rows(self, rows: list[dict[str, Any]]) -> None:
         """Save multiple rows to both storages."""
         for row in rows:
             self.save_row(row)
@@ -337,8 +337,8 @@ class DualStorageManager:
 
 @timed("save_with_backup")
 def save_with_backup(
-    results: List[Dict[str, Any]],
-    sheets_service: Optional[Any] = None,
+    results: list[dict[str, Any]],
+    sheets_service: Any | None = None,
     csv_path: str = DEFAULT_CSV_FILENAME
 ) -> bool:
     """
@@ -411,8 +411,8 @@ class FileService:
     async def add_data_to_csv(
         self, 
         file_name: str, 
-        data: List[Dict[str, Any]], 
-        fieldnames: Optional[List[str]] = None
+        data: list[dict[str, Any]], 
+        fieldnames: list[str] | None = None
     ) -> bool:
         """
         Add data to a CSV file (append if exists, create if not).
@@ -453,7 +453,7 @@ class FileService:
             logger.error(f"Failed to write to {filepath}: {e}")
             return False
     
-    async def read_data_from_csv(self, file_name: str) -> List[Dict[str, Any]]:
+    async def read_data_from_csv(self, file_name: str) -> list[dict[str, Any]]:
         """
         Read data from a CSV file.
         

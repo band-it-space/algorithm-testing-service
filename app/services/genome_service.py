@@ -1,15 +1,15 @@
-import itertools
 import csv
+import itertools
 import logging
-from typing import List, Dict, Any, Optional
 from pathlib import Path
+from typing import Any
 
 from app.models.algorithm_models import AlgorithmParameters, ParameterRange
 
 logger = logging.getLogger(__name__)
 
 
-def parse_parameter_ranges(data: List[Dict[str, Any]]) -> List[ParameterRange]:
+def parse_parameter_ranges(data: list[dict[str, Any]]) -> list[ParameterRange]:
     """Parse input data (from CSV or Google Sheets) into ParameterRange objects."""
     ranges = []
     for row in data:
@@ -28,7 +28,7 @@ def parse_parameter_ranges(data: List[Dict[str, Any]]) -> List[ParameterRange]:
     return ranges
 
 
-def parse_parameter_ranges_from_csv(file_path: str) -> List[ParameterRange]:
+def parse_parameter_ranges_from_csv(file_path: str) -> list[ParameterRange]:
     """Parse parameter ranges from a CSV file."""
     ranges = []
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -51,7 +51,7 @@ def parse_parameter_ranges_from_csv(file_path: str) -> List[ParameterRange]:
     return ranges
 
 
-def calculate_total_combinations(ranges: List[ParameterRange]) -> int:
+def calculate_total_combinations(ranges: list[ParameterRange]) -> int:
     """Calculate total number of genome combinations."""
     variable_ranges = [r for r in ranges if r.change]
     if not variable_ranges:
@@ -64,9 +64,9 @@ def calculate_total_combinations(ranges: List[ParameterRange]) -> int:
 
 
 def generate_genomes(
-    ranges: List[ParameterRange],
-    base_params: Optional[AlgorithmParameters] = None
-) -> List[Dict[str, Any]]:
+    ranges: list[ParameterRange],
+    base_params: AlgorithmParameters | None = None
+) -> list[dict[str, Any]]:
     """
     Generate all parameter combinations (genomes).
     
@@ -126,7 +126,7 @@ def generate_genomes(
     return genomes
 
 
-def get_genome_by_id(genomes: List[Dict[str, Any]], genome_id: str) -> Optional[Dict[str, Any]]:
+def get_genome_by_id(genomes: list[dict[str, Any]], genome_id: str) -> dict[str, Any] | None:
     """Retrieve specific genome by ID."""
     for genome in genomes:
         if genome.get("genome_id") == genome_id:
@@ -134,12 +134,12 @@ def get_genome_by_id(genomes: List[Dict[str, Any]], genome_id: str) -> Optional[
     return None
 
 
-def get_variable_parameter_names(ranges: List[ParameterRange]) -> List[str]:
+def get_variable_parameter_names(ranges: list[ParameterRange]) -> list[str]:
     """Get list of parameter names that are being varied."""
     return [r.name for r in ranges if r.change]
 
 
-def create_genome_summary(genomes: List[Dict[str, Any]], ranges: List[ParameterRange]) -> Dict[str, Any]:
+def create_genome_summary(genomes: list[dict[str, Any]], ranges: list[ParameterRange]) -> dict[str, Any]:
     """Create summary of genome generation for logging/reporting."""
     variable_ranges = [r for r in ranges if r.change]
     
@@ -161,7 +161,7 @@ def create_genome_summary(genomes: List[Dict[str, Any]], ranges: List[ParameterR
         "fixed_parameters_count": len([r for r in ranges if not r.change])
     }
 
-def get_genome_parameters(genome_id: str, optimization_id: Optional[str] = None) -> Optional[dict]:
+def get_genome_parameters(genome_id: str, optimization_id: str | None = None) -> dict | None:
     """
     Get genome parameters by ID.
     

@@ -9,32 +9,20 @@ Base URL: `http://localhost:8000`
 1. [Health & Status Endpoints](#health--status-endpoints)
 2. [Algorithm Testing Endpoints](#algorithm-testing-endpoints)
 3. [Optimization Endpoints (Dynamic Parameters)](#optimization-endpoints-dynamic-parameters)
-4. [Monitoring Endpoints](#monitoring-endpoints)
-5. [Summary Endpoints](#summary-endpoints)
-6. [Test Endpoints](#test-endpoints)
+4. [Genome Endpoints](#genome-endpoints)
+5. [Google Sheets Endpoints](#google-sheets-endpoints)
+6. [Monitoring Endpoints](#monitoring-endpoints)
+7. [Summary Endpoints](#summary-endpoints)
+8. [Dashboard](#dashboard)
+9. [Workflow Examples](#workflow-examples)
+10. [Google Sheets Integration](#google-sheets-integration)
 
 ---
 
 ## Health & Status Endpoints
 
-### `GET /`
-**Description:** Root endpoint that returns service status message.
-
-**Response:**
-```json
-{
-  "message": "Algorithm Testing Service is running"
-}
-```
-
-**Example:**
-```bash
-curl http://localhost:8000/
-```
-
----
-
 ### `GET /health`
+
 **Description:** Health check endpoint for Docker container monitoring.
 
 **Response:**
@@ -54,7 +42,8 @@ curl http://localhost:8000/health
 ## Algorithm Testing Endpoints
 
 ### `GET /api/v1/start-testing/`
-**Description:** Start algorithm testing for all stocks in `screener.csv`. Automatically skips stocks that are already processed (exist in `results.csv`) and queues the remaining stocks to the algorithm queue.
+
+**Description:** Start algorithm testing for all stocks in `screener.csv`. Automatically skips stocks already present in `results.csv` and enqueues the remaining stocks to the algorithm queue.
 
 **Process:**
 1. Reads stock list from `data/screener.csv`
@@ -67,8 +56,8 @@ curl http://localhost:8000/health
 ```json
 {
   "message": "Done: 10, Added to queue: 5",
-  "done": ["3888", "2800", "1234"],
-  "added": ["5678", "9012"],
+  "done": ["0001", "0005"],
+  "added": ["3888", "2800", "0700"],
   "status": "queued"
 }
 ```
@@ -78,16 +67,15 @@ curl http://localhost:8000/health
 curl http://localhost:8000/api/v1/start-testing/
 ```
 
-**Use Case:** Traditional algorithm testing with default parameters for all stocks.
-
 ---
 
 ## Optimization Endpoints (Dynamic Parameters)
 
 ### `POST /api/v1/run-optimization`
-**Description:** Start a new optimization run that tests multiple parameter combinations (genomes) across one or more stocks. This is the main endpoint for dynamic parameters integration.
 
-**Request Body:**
+**Description:** Start a new optimization run that tests multiple parameter combinations (genomes) across one or more stocks.
+
+**Request Body (Google Sheets):**
 ```json
 {
   "stock_codes": ["3888", "2800"],
@@ -96,28 +84,28 @@ curl http://localhost:8000/api/v1/start-testing/
 }
 ```
 
-**OR with manual parameter ranges:**
+**Request Body (manual parameter ranges):**
 ```json
 {
   "stock_codes": ["3888"],
   "parameter_ranges": [
     {
-      "Rule": "B1",
       "Parameter Variable": "input_B1_upper_range",
       "Base": 0.65,
       "Min": 0.55,
       "Max": 0.75,
       "Step": 0.1,
-      "Change": true
+      "Change": true,
+      "Rule": "B1"
     },
     {
-      "Rule": "B3",
       "Parameter Variable": "input_B3_LR_lookback",
       "Base": 58,
       "Min": 40,
       "Max": 80,
       "Step": 10,
-      "Change": true
+      "Change": true,
+      "Rule": "B3"
     }
   ]
 }
@@ -127,23 +115,16 @@ curl http://localhost:8000/api/v1/start-testing/
 ```json
 {
   "optimization_id": "opt_abc123def456",
-  "total_genomes": 15,
-  "total_tasks": 30,
-  "stock_codes": ["3888", "2800"],
-  "status": "pending",
-  "message": "Optimization created. Queuing 30 tasks..."
+  "total_genomes": 6,
+  "total_tasks": 6,
+  "stock_codes": ["3888"],
+  "status": "queued",
+  "message": "Optimization created and 6 tasks queued successfully"
 }
 ```
 
 **Example:**
 ```bash
-# PowerShell
-Invoke-WebRequest -Uri "http://localhost:8000/api/v1/run-optimization" `
-  -Method POST `
-  -ContentType "application/json" `
-  -Body '{"stock_codes": ["3888"], "use_google_sheets": true}'
-
-# Bash
 curl -X POST http://localhost:8000/api/v1/run-optimization \
   -H "Content-Type: application/json" \
   -d '{"stock_codes": ["3888"], "use_google_sheets": true}'
@@ -152,10 +133,11 @@ curl -X POST http://localhost:8000/api/v1/run-optimization \
 ---
 
 ### `GET /api/v1/optimization/{optimization_id}/status`
+
 **Description:** Get the current status and progress of a running optimization.
 
 **Path Parameters:**
-- `optimization_id` - The optimization ID returned from `/run-optimization`
+- `optimization_id` — The optimization ID returned from `/run-optimization`
 
 **Response:**
 ```json
@@ -166,20 +148,29 @@ curl -X POST http://localhost:8000/api/v1/run-optimization \
   "completed_tasks": 15,
   "failed_tasks": 0,
   "progress_percent": 50.0,
-  "total_genomes": 15,
-  "stock_codes": ["3888", "2800"],
+  "total_genomes": 6,
+  "stock_codes": ["3888"],
   "created_at": "2026-02-04T15:30:00",
-  "updated_at": "2026-02-04T15:35:00"
+  "updated_at": "2026-02-04T15:35:00",
+  "elapsed_seconds": 300.0,
+  "eta_seconds": 300.0,
+  "eta_formatted": "5m 0s",
+  "smart_filtering": {
+    "enabled": true,
+    "genomes_skipped": 3,
+    "eliminated_params": [],
+    "error": null
+  }
 }
 ```
 
 **Status Values:**
-- `pending` - Optimization created, not yet started
-- `queued` - Tasks queued to workers
-- `running` - Currently processing
-- `completed` - All tasks finished
-- `failed` - Optimization failed
-- `cancelled` - Manually cancelled
+- `pending` — Optimization created, not yet started
+- `queued` — Tasks queued to workers
+- `running` — Currently processing
+- `completed` — All tasks finished
+- `failed` — Optimization failed
+- `cancelled` — Manually cancelled
 
 **Example:**
 ```bash
@@ -189,6 +180,7 @@ curl http://localhost:8000/api/v1/optimization/opt_abc123def456/status
 ---
 
 ### `GET /api/v1/optimization/{optimization_id}/results`
+
 **Description:** Get all genome results for a completed optimization.
 
 **Response:**
@@ -196,32 +188,15 @@ curl http://localhost:8000/api/v1/optimization/opt_abc123def456/status
 {
   "optimization_id": "opt_abc123def456",
   "status": "completed",
-  "total_results": 30,
+  "total_results": 6,
   "results": [
     {
       "genome_id": "G_000",
       "stock_code": "3888",
-      "trade_count": 10,
-      "profit_delta": 0,
-      "win_rate_delta": 0,
-      "total_win": 21580,
-      "total_loss": 8045,
-      "trades_win": 5,
-      "trades_loss": 5,
-      "avg_win": 4316,
-      "avg_loss": 1609,
-      "payoff_ratio": 2.68,
-      "parameters": {
-        "input_B1_upper_range": 0.65,
-        "input_B3_LR_lookback": 58
-      }
-    },
-    {
-      "genome_id": "G_001",
-      "stock_code": "3888",
-      "profit_delta": 15.89,
-      "win_rate_delta": -5.56,
-      "...": "..."
+      "trade_count": 12,
+      "profit_delta": 31.74,
+      "win_rate_delta": 15.2,
+      "payoff_ratio": 2.8
     }
   ]
 }
@@ -235,6 +210,7 @@ curl http://localhost:8000/api/v1/optimization/opt_abc123def456/results
 ---
 
 ### `POST /api/v1/optimization/{optimization_id}/cancel`
+
 **Description:** Cancel a running optimization. Cannot cancel already completed optimizations.
 
 **Response:**
@@ -246,20 +222,17 @@ curl http://localhost:8000/api/v1/optimization/opt_abc123def456/results
 
 **Example:**
 ```bash
-# PowerShell
-Invoke-WebRequest -Uri "http://localhost:8000/api/v1/optimization/opt_abc123def456/cancel" -Method POST
-
-# Bash
 curl -X POST http://localhost:8000/api/v1/optimization/opt_abc123def456/cancel
 ```
 
 ---
 
 ### `GET /api/v1/optimizations`
+
 **Description:** List recent optimizations with their status.
 
 **Query Parameters:**
-- `limit` (optional) - Maximum number of results (default: 50)
+- `limit` (optional, default: 50) — Maximum number of results
 
 **Response:**
 ```json
@@ -271,10 +244,11 @@ curl -X POST http://localhost:8000/api/v1/optimization/opt_abc123def456/cancel
     "completed_tasks": 30,
     "failed_tasks": 0,
     "progress_percent": 100.0,
-    "total_genomes": 15,
-    "stock_codes": ["3888", "2800"],
+    "total_genomes": 6,
+    "stock_codes": ["3888"],
     "created_at": "2026-02-04T15:30:00",
-    "updated_at": "2026-02-04T15:45:00"
+    "updated_at": "2026-02-04T16:00:00",
+    "elapsed_seconds": 1800.0
   }
 ]
 ```
@@ -287,30 +261,14 @@ curl http://localhost:8000/api/v1/optimizations?limit=10
 ---
 
 ### `POST /api/v1/preview-genomes`
-**Description:** Preview the number of genome combinations that would be generated before starting an optimization. Useful for estimating computational cost.
+
+**Description:** Preview the number of genome combinations that would be generated before starting an optimization.
 
 **Request Body:**
 ```json
 {
   "use_google_sheets": true,
   "sheet_id": "11a3m0AlIGsZ5O1HRVgjCP3zSCds-b_5OJGXmHKCP56U"
-}
-```
-
-**OR:**
-```json
-{
-  "parameter_ranges": [
-    {
-      "Rule": "B1",
-      "Parameter Variable": "input_B1_upper_range",
-      "Base": 0.65,
-      "Min": 0.55,
-      "Max": 0.75,
-      "Step": 0.1,
-      "Change": true
-    }
-  ]
 }
 ```
 
@@ -327,22 +285,11 @@ curl http://localhost:8000/api/v1/optimizations?limit=10
       "max": 0.75,
       "step": 0.1,
       "values_count": 3
-    },
-    {
-      "name": "input_B3_LR_lookback",
-      "rule": "B3",
-      "base": 58,
-      "min": 40,
-      "max": 80,
-      "step": 10,
-      "values_count": 5
     }
   ],
   "fixed_parameters_count": 31
 }
 ```
-
-**Calculation:** Total = (3 values × 5 values) + 1 BASE = 16 genomes
 
 **Example:**
 ```bash
@@ -353,9 +300,61 @@ curl -X POST http://localhost:8000/api/v1/preview-genomes \
 
 ---
 
+## Genome Endpoints
+
+### `GET /api/v1/genome/{genome_id}/parameters`
+
+**Description:** Get the parameter values for a specific genome.
+
+**Path Parameters:**
+- `genome_id` — The genome identifier (e.g., `G_001`)
+
+**Query Parameters:**
+- `optimization_id` (optional) — Scope search to a specific optimization
+
+**Response:** Returns the genome parameters dictionary, or 404 if not found.
+
+**Example:**
+```bash
+curl http://localhost:8000/api/v1/genome/G_001/parameters?optimization_id=opt_abc123def456
+```
+
+---
+
+## Google Sheets Endpoints
+
+### `GET /api/v1/sheets/health`
+
+**Description:** Check Google Sheets connection, read/write permissions, and current configuration.
+
+**Response:**
+```json
+{
+  "connected": true,
+  "read": true,
+  "write": true,
+  "config": {
+    "input_sheet_id": "...",
+    "output_sheet_id": "...",
+    "input_sheet_name": "Parameter Tuning",
+    "output_sheet_name": "Automated Results",
+    "output_per_genome_sheet_name": "Automated Results Per Genome"
+  },
+  "error": null
+}
+```
+
+**Example:**
+```bash
+curl http://localhost:8000/api/v1/sheets/health
+```
+
+---
+
 ## Monitoring Endpoints
 
 ### `GET /api/v1/monitoring/queues`
+
 **Description:** Get detailed information about all queues (pending, failed, scheduled, started jobs).
 
 **Response:**
@@ -364,14 +363,14 @@ curl -X POST http://localhost:8000/api/v1/preview-genomes \
   "queues": [
     {
       "name": "algorithm_calculation",
-      "pending_jobs": 15,
-      "failed_jobs": 2,
+      "pending_jobs": 5,
+      "failed_jobs": 0,
       "scheduled_jobs": 0,
-      "started_jobs": 1
+      "started_jobs": 2
     },
     {
       "name": "result_processing",
-      "pending_jobs": 8,
+      "pending_jobs": 3,
       "failed_jobs": 0,
       "scheduled_jobs": 0,
       "started_jobs": 1
@@ -394,39 +393,28 @@ curl http://localhost:8000/api/v1/monitoring/queues
 ---
 
 ### `GET /api/v1/monitoring/workers`
-**Description:** Get information about active workers (their state, current job, success/failure counts).
+
+**Description:** Get information about active workers (state, current job, success/failure counts).
 
 **Response:**
 ```json
 {
   "workers": [
     {
-      "name": "algorithm-worker.1",
+      "name": "worker-1",
       "queues": ["algorithm_calculation"],
       "state": "busy",
-      "current_job": "abc-123-def",
-      "last_heartbeat": "2026-02-04T15:30:45",
-      "successful_job_count": 152,
-      "failed_job_count": 3
-    },
-    {
-      "name": "result-worker.1",
-      "queues": ["result_processing"],
-      "state": "idle",
-      "current_job": null,
-      "last_heartbeat": "2026-02-04T15:30:50",
-      "successful_job_count": 148,
-      "failed_job_count": 1
+      "current_job": "job-uuid",
+      "last_heartbeat": "2026-02-04T15:35:00",
+      "successful_job_count": 100,
+      "failed_job_count": 2
     }
   ],
   "total_workers": 2
 }
 ```
 
-**Worker States:**
-- `busy` - Currently processing a job
-- `idle` - Waiting for jobs
-- `suspended` - Worker paused
+**Worker States:** `busy`, `idle`, `suspended`
 
 **Example:**
 ```bash
@@ -436,13 +424,14 @@ curl http://localhost:8000/api/v1/monitoring/workers
 ---
 
 ### `GET /api/v1/monitoring/jobs/{queue_name}`
+
 **Description:** List jobs in a specific queue.
 
 **Path Parameters:**
-- `queue_name` - Either `algorithm_calculation` or `result_processing`
+- `queue_name` — Either `algorithm_calculation` or `result_processing`
 
 **Query Parameters:**
-- `limit` (optional) - Maximum number of jobs to return (default: 10)
+- `limit` (optional, default: 10) — Maximum number of jobs to return
 
 **Response:**
 ```json
@@ -450,11 +439,11 @@ curl http://localhost:8000/api/v1/monitoring/workers
   "queue_name": "algorithm_calculation",
   "jobs": [
     {
-      "id": "abc-123-def",
+      "id": "job-uuid",
       "status": "queued",
       "created_at": "2026-02-04T15:30:00",
       "enqueued_at": "2026-02-04T15:30:01",
-      "data": "Stock: 3888, Genome: G_001"
+      "data": "process_algorithm_task(stock=3888...)"
     }
   ],
   "total_pending": 15
@@ -469,27 +458,28 @@ curl http://localhost:8000/api/v1/monitoring/jobs/algorithm_calculation?limit=20
 ---
 
 ### `GET /api/v1/monitoring/stats`
+
 **Description:** Get overall system statistics (all queues and workers).
 
 **Response:**
 ```json
 {
   "algorithm_queue": {
-    "pending": 15,
-    "failed": 2,
+    "pending": 5,
+    "failed": 0,
     "scheduled": 0,
-    "started": 1
+    "started": 2
   },
   "result_queue": {
-    "pending": 8,
+    "pending": 3,
     "failed": 0,
     "scheduled": 0,
     "started": 1
   },
   "workers": {
-    "total_workers": 3,
-    "active_workers": 2,
-    "idle_workers": 1
+    "total": 4,
+    "busy": 3,
+    "idle": 1
   },
   "total_jobs": 24
 }
@@ -505,6 +495,7 @@ curl http://localhost:8000/api/v1/monitoring/stats
 ## Summary Endpoints
 
 ### `GET /api/v1/summary/`
+
 **Description:** Generate trading summary from `general_results.csv`. Calculates win/loss statistics for closed trades only and saves to `summary.csv`.
 
 **Process:**
@@ -519,15 +510,15 @@ curl http://localhost:8000/api/v1/monitoring/stats
   "message": "Summary generated successfully",
   "file": "summary.csv",
   "stats": {
-    "Total # of Trades (Closed)": 150,
-    "Total # of Open Trades": 5,
-    "Number Winning Trades": 98,
-    "Number Losing Trades": 52,
-    "Percent Profitable": "65.33%",
-    "Avg Trade (win & loss) ($)": "125.45",
-    "Average Winning Trade ($)": "245.80",
-    "Average Losing Trade ($)": "-85.23",
-    "Ratio Avg Win / Avg Loss": "2.88"
+    "Total # of Trades (Closed)": 50,
+    "Total # of Open Trades": 3,
+    "Number Winning Trades": 30,
+    "Number Losing Trades": 20,
+    "Percent Profitable": "60.00%",
+    "Avg Trade (win & loss) ($)": "125.50",
+    "Average Winning Trade ($)": "350.00",
+    "Average Losing Trade ($)": "-210.00",
+    "Ratio Avg Win / Avg Loss": "1.67"
   }
 }
 ```
@@ -539,37 +530,13 @@ curl http://localhost:8000/api/v1/summary/
 
 ---
 
-## Test Endpoints
+## Dashboard
 
-### `GET /data-test`
-**Description:** Test endpoint for data operations (development only).
+### `GET /dashboard`
 
-**Response:**
-```json
-{
-  "message": "Data test endpoint"
-}
-```
+**Description:** HTML dashboard for monitoring optimization progress in real-time. Auto-polls the status API and displays progress, ETA, skipped genomes, and toxic parameters.
 
----
-
-### `GET /test`
-**Description:** Test endpoint for result processing worker (development only).
-
-**Response:**
-```json
-{
-  "message": "Ok"
-}
-```
-
----
-
-### `GET /test-algo`
-**Description:** Test endpoint for algorithm worker with stock 2800 (development only).
-
-**Response:**
-Returns algorithm processing results for stock 2800.
+Open in browser: [http://localhost:8000/dashboard](http://localhost:8000/dashboard)
 
 ---
 
@@ -591,26 +558,30 @@ curl http://localhost:8000/api/v1/summary/
 ### Dynamic Parameters Optimization
 
 ```bash
-# 1. Preview genome combinations
+# 1. Check Google Sheets connection
+curl http://localhost:8000/api/v1/sheets/health
+
+# 2. Preview genome combinations
 curl -X POST http://localhost:8000/api/v1/preview-genomes \
   -H "Content-Type: application/json" \
   -d '{"use_google_sheets": true}'
 
-# 2. Start optimization
+# 3. Start optimization
 curl -X POST http://localhost:8000/api/v1/run-optimization \
   -H "Content-Type: application/json" \
   -d '{"stock_codes": ["3888", "2800"], "use_google_sheets": true}'
 
 # Response: {"optimization_id": "opt_abc123def456", ...}
 
-# 3. Monitor progress
+# 4. Monitor progress (API or dashboard)
 curl http://localhost:8000/api/v1/optimization/opt_abc123def456/status
+# Or open http://localhost:8000/dashboard in browser
 
-# 4. Get results when complete
+# 5. Get results when complete
 curl http://localhost:8000/api/v1/optimization/opt_abc123def456/results
 
-# 5. Check worker activity
-curl http://localhost:8000/api/v1/monitoring/workers
+# 6. Get specific genome parameters
+curl http://localhost:8000/api/v1/genome/G_001/parameters?optimization_id=opt_abc123def456
 ```
 
 ---
@@ -622,54 +593,14 @@ For optimization endpoints using Google Sheets:
 **Required Environment Variables:**
 ```env
 GOOGLE_SHEETS_CREDENTIALS_PATH=/app/credentials/google_sheets.json
-INPUT_SHEET_ID=11a3m0AlIGsZ5O1HRVgjCP3zSCds-b_5OJGXmHKCP56U
-OUTPUT_SHEET_ID=11a3m0AlIGsZ5O1HRVgjCP3zSCds-b_5OJGXmHKCP56U
+INPUT_SHEET_ID=your-input-sheet-id
+OUTPUT_SHEET_ID=your-output-sheet-id
+INPUT_SHEET_NAME=Parameter Tuning
+OUTPUT_SHEET_NAME=Automated Results
+OUTPUT_PER_GENOME_SHEET_NAME=Automated Results Per Genome
 ```
 
 **Sheet Structure:**
-- **Input Tab:** `Parameter Tuning` - Contains parameter ranges
-- **Output Tab:** `Automated Results` - Receives optimization results
-
-**Input Tab Columns:**
-| Column | Description |
-|--------|-------------|
-| Rule | Rule identifier (B1, B3, S1, etc.) |
-| Parameter Variable | Parameter name (e.g., input_B1_upper_range) |
-| Base | Base value for the parameter |
-| Min | Minimum value for optimization |
-| Max | Maximum value for optimization |
-| Step | Step size for value generation |
-| Change | TRUE to vary, FALSE to keep fixed |
-
----
-
-## Error Responses
-
-All endpoints return standard error responses:
-
-```json
-{
-  "detail": "Error message description"
-}
-```
-
-**Common HTTP Status Codes:**
-- `200` - Success
-- `400` - Bad Request (invalid input)
-- `404` - Not Found (resource doesn't exist)
-- `500` - Internal Server Error
-
----
-
-## Interactive API Documentation
-
-Access the auto-generated Swagger UI documentation:
-
-**Swagger UI:** `http://localhost:8000/docs`  
-**ReDoc:** `http://localhost:8000/redoc`
-
-These provide interactive API testing capabilities directly in your browser.
-
----
-
-*For detailed setup instructions, see [start_guideline.md](./start_guideline.md)*
+- **Input Tab** (`Parameter Tuning`) — Contains parameter ranges for optimization
+- **Output Tab** (`Automated Results`) — Aggregated genome comparison results
+- **Output Per Genome Tab** (`Automated Results Per Genome`) — Detailed per-genome results

@@ -11,12 +11,13 @@ Performance impact:
 
 Author: Optimization Task
 """
+import logging
+from bisect import bisect_right
+from dataclasses import dataclass, field
+from typing import Any
+
 import numpy as np
 import pandas as pd
-from bisect import bisect_right
-from typing import List, Dict, Optional, Any, NamedTuple, Tuple
-from dataclasses import dataclass, field
-import logging
 
 from app.models.algorithm_models import AlgorithmParameters
 
@@ -31,7 +32,7 @@ class OHLCV:
     high: float
     low: float
     close: float
-    volume: Optional[float] = None
+    volume: float | None = None
 
 
 class PrecomputedIndicators:
@@ -53,8 +54,8 @@ class PrecomputedIndicators:
     
     def __init__(
         self, 
-        ohlcv: List[OHLCV], 
-        spy_data: List[OHLCV],
+        ohlcv: list[OHLCV], 
+        spy_data: list[OHLCV],
         params: AlgorithmParameters = None
     ):
         self.ohlcv = ohlcv
@@ -81,102 +82,102 @@ class PrecomputedIndicators:
         
         # Pre-computed indicator arrays (initialized as None)
         # B1 indicators
-        self.bb_b1_upper: Optional[np.ndarray] = None
-        self.bb_b1_middle: Optional[np.ndarray] = None
-        self.sma_b1: Optional[np.ndarray] = None
-        self.rolling_max_b1: Optional[np.ndarray] = None
+        self.bb_b1_upper: np.ndarray | None = None
+        self.bb_b1_middle: np.ndarray | None = None
+        self.sma_b1: np.ndarray | None = None
+        self.rolling_max_b1: np.ndarray | None = None
         
         # B3 indicators
-        self.bbw_b3: Optional[np.ndarray] = None
-        self.sma_bbw_b3: Optional[np.ndarray] = None
-        self.slope_b3: Optional[np.ndarray] = None
+        self.bbw_b3: np.ndarray | None = None
+        self.sma_bbw_b3: np.ndarray | None = None
+        self.slope_b3: np.ndarray | None = None
         
         # B8, B9, B10, B11, B12, B18 indicators
-        self.rolling_min_b8_recent: Optional[np.ndarray] = None
-        self.rolling_min_b8_past: Optional[np.ndarray] = None
-        self.sma_b9: Optional[np.ndarray] = None
-        self.rolling_min_b10: Optional[np.ndarray] = None
-        self.atr_b11: Optional[np.ndarray] = None
-        self.atr_history_b11: Optional[np.ndarray] = None
-        self.sma_b12: Optional[np.ndarray] = None
+        self.rolling_min_b8_recent: np.ndarray | None = None
+        self.rolling_min_b8_past: np.ndarray | None = None
+        self.sma_b9: np.ndarray | None = None
+        self.rolling_min_b10: np.ndarray | None = None
+        self.atr_b11: np.ndarray | None = None
+        self.atr_history_b11: np.ndarray | None = None
+        self.sma_b12: np.ndarray | None = None
         
         # B13 relative strength (uses XX and YY periods)
-        self.stock_ratio_xx: Optional[np.ndarray] = None
-        self.index_ratio_xx: Optional[np.ndarray] = None
-        self.stock_ratio_yy: Optional[np.ndarray] = None
-        self.index_ratio_yy: Optional[np.ndarray] = None
+        self.stock_ratio_xx: np.ndarray | None = None
+        self.index_ratio_xx: np.ndarray | None = None
+        self.stock_ratio_yy: np.ndarray | None = None
+        self.index_ratio_yy: np.ndarray | None = None
         
         # B18 indicators (need all 8 conditions)
-        self.bbw_b18: Optional[np.ndarray] = None
-        self.sma_bbw_b18: Optional[np.ndarray] = None
-        self.bb_b18_upper: Optional[np.ndarray] = None
-        self.sma_50: Optional[np.ndarray] = None
-        self.sma_150: Optional[np.ndarray] = None
-        self.sma_200: Optional[np.ndarray] = None
+        self.bbw_b18: np.ndarray | None = None
+        self.sma_bbw_b18: np.ndarray | None = None
+        self.bb_b18_upper: np.ndarray | None = None
+        self.sma_50: np.ndarray | None = None
+        self.sma_150: np.ndarray | None = None
+        self.sma_200: np.ndarray | None = None
         
         # S1 stop loss (ATR-based)
-        self.atr_s1: Optional[np.ndarray] = None
+        self.atr_s1: np.ndarray | None = None
         
         # S5/S6/etc indicators
-        self.atr_s5: Optional[np.ndarray] = None
+        self.atr_s5: np.ndarray | None = None
         
         # S9 energy (pre-computed RSI)
-        self.rsi_10: Optional[np.ndarray] = None
-        self.stochrsi_10: Optional[np.ndarray] = None
+        self.rsi_10: np.ndarray | None = None
+        self.stochrsi_10: np.ndarray | None = None
         
         # General rolling windows
-        self.rolling_max_20: Optional[np.ndarray] = None
-        self.rolling_min_250: Optional[np.ndarray] = None
-        self.rolling_max_250: Optional[np.ndarray] = None
+        self.rolling_max_20: np.ndarray | None = None
+        self.rolling_min_250: np.ndarray | None = None
+        self.rolling_max_250: np.ndarray | None = None
         
         # === Sell-side ATR arrays (Wilder's smoothing) ===
-        self.atr_s7: Optional[np.ndarray] = None    # S7, S16
-        self.atr_10: Optional[np.ndarray] = None     # S10
-        self.atr_100: Optional[np.ndarray] = None    # S10
+        self.atr_s7: np.ndarray | None = None    # S7, S16
+        self.atr_10: np.ndarray | None = None     # S10
+        self.atr_100: np.ndarray | None = None    # S10
 
         # === S8: SMA-based ATR (different algorithm from Wilder's) ===
-        self.sma_tr_22: Optional[np.ndarray] = None
-        self.sma_tr_100: Optional[np.ndarray] = None
-        self.rolling_max_sma_tr_22: Optional[np.ndarray] = None
+        self.sma_tr_22: np.ndarray | None = None
+        self.sma_tr_100: np.ndarray | None = None
+        self.rolling_max_sma_tr_22: np.ndarray | None = None
 
         # === Rolling windows for sell conditions ===
-        self.rolling_max_high_90: Optional[np.ndarray] = None   # S6, S10
-        self.rolling_max_high_150: Optional[np.ndarray] = None  # S17
-        self.rolling_min_low_150: Optional[np.ndarray] = None   # S17
-        self.rolling_min_close_80: Optional[np.ndarray] = None  # S13
-        self.rolling_max_high_5: Optional[np.ndarray] = None    # E5
-        self.rolling_min_low_5: Optional[np.ndarray] = None     # E5
+        self.rolling_max_high_90: np.ndarray | None = None   # S6, S10
+        self.rolling_max_high_150: np.ndarray | None = None  # S17
+        self.rolling_min_low_150: np.ndarray | None = None   # S17
+        self.rolling_min_close_80: np.ndarray | None = None  # S13
+        self.rolling_max_high_5: np.ndarray | None = None    # E5
+        self.rolling_min_low_5: np.ndarray | None = None     # E5
 
         # === S6: new 90-day high flags ===
-        self.is_new_high_90: Optional[np.ndarray] = None
+        self.is_new_high_90: np.ndarray | None = None
 
         # === Fibonacci ratio for S11/S12 ===
-        self.fibo_ratio_250: Optional[np.ndarray] = None
-        self.fibo_below_382: Optional[np.ndarray] = None
-        self.fibo_below_236: Optional[np.ndarray] = None
-        self.fibo_consec_s11: Optional[np.ndarray] = None
-        self.fibo_consec_s12: Optional[np.ndarray] = None
+        self.fibo_ratio_250: np.ndarray | None = None
+        self.fibo_below_382: np.ndarray | None = None
+        self.fibo_below_236: np.ndarray | None = None
+        self.fibo_consec_s11: np.ndarray | None = None
+        self.fibo_consec_s12: np.ndarray | None = None
 
         # === S14 relative performance at multiple horizons ===
-        self.s14_stock_ratios: Dict[int, np.ndarray] = {}
-        self.s14_index_ratios: Dict[int, np.ndarray] = {}
+        self.s14_stock_ratios: dict[int, np.ndarray] = {}
+        self.s14_index_ratios: dict[int, np.ndarray] = {}
 
         # === S4 SMA (may differ from sma_150) ===
-        self.sma_s4: Optional[np.ndarray] = None
+        self.sma_s4: np.ndarray | None = None
 
         # === Date-to-index map for O(1) buy-date lookup ===
-        self.date_to_idx: Dict[str, int] = {}
+        self.date_to_idx: dict[str, int] = {}
 
         # === Energy indicator arrays ===
-        self.e1: Optional[np.ndarray] = None
-        self.e2: Optional[np.ndarray] = None
-        self.e3: Optional[np.ndarray] = None
-        self.e4: Optional[np.ndarray] = None
-        self.e5: Optional[np.ndarray] = None
-        self.e_total: Optional[np.ndarray] = None
-        self.energy_score: Optional[np.ndarray] = None
-        self.stock_ratio_33: Optional[np.ndarray] = None
-        self.spy_ratio_33: Optional[np.ndarray] = None
+        self.e1: np.ndarray | None = None
+        self.e2: np.ndarray | None = None
+        self.e3: np.ndarray | None = None
+        self.e4: np.ndarray | None = None
+        self.e5: np.ndarray | None = None
+        self.e_total: np.ndarray | None = None
+        self.energy_score: np.ndarray | None = None
+        self.stock_ratio_33: np.ndarray | None = None
+        self.spy_ratio_33: np.ndarray | None = None
 
         self._computed = False
     
@@ -769,7 +770,7 @@ class PrecomputedIndicators:
         closes: np.ndarray, 
         spy_closes: np.ndarray,
         period: int
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Calculate price ratios for stock and index over period.
         
         Returns (stock_ratio, index_ratio) where ratio = today / period_ago.
@@ -1168,7 +1169,7 @@ class PrecomputedIndicators:
         
         return cond1 and cond2 and cond3 and cond4 and cond5 and cond6 and cond7 and cond8
     
-    def get_s1_stop_loss(self, idx: int, entry_close: Optional[float] = None) -> float:
+    def get_s1_stop_loss(self, idx: int, entry_close: float | None = None) -> float:
         """Calculate S1 stop loss at index.
         
         Original logic from calcS1Stop:
@@ -1214,7 +1215,7 @@ class PrecomputedIndicators:
             return round(close * (1 - medium_stop), 4)
         return round(base_stop, 4)
     
-    def run_all_buy_conditions_fast(self, idx: int, debug: bool = False) -> Dict[str, Any]:
+    def run_all_buy_conditions_fast(self, idx: int, debug: bool = False) -> dict[str, Any]:
         """
         Run all buy conditions using pre-computed indicators.
         
@@ -1655,7 +1656,7 @@ class PrecomputedIndicators:
 
         return {"conditions": conditions, "stop_loss": new_stop}
 
-    def is_buy_fast(self, signals: Dict[str, Any]) -> bool:
+    def is_buy_fast(self, signals: dict[str, Any]) -> bool:
         """Check if buy conditions are met."""
         return bool(
             (signals['B1'] and signals['B3'] and signals['B8'] and 
@@ -1665,7 +1666,7 @@ class PrecomputedIndicators:
         )
 
 
-def is_buy_fast(signals: Dict[str, Any]) -> bool:
+def is_buy_fast(signals: dict[str, Any]) -> bool:
     """Standalone version — check if buy conditions are met."""
     return bool(
         (signals['B1'] and signals['B3'] and signals['B8'] and 

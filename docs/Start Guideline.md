@@ -8,7 +8,7 @@ This guide explains how to configure and run the project in Docker with the dyna
 
 1. **Docker** and **Docker Compose** installed
 2. **Google Cloud Service Account** (for Sheets integration)
-3. **MySQL Database** accessible from Docker network
+3. **StockFisher API key** (for stock data access)
 
 ---
 
@@ -30,6 +30,7 @@ If `.env.example` doesn't exist, create `.env` with these variables:
 # =================================
 REDIS_HOST=redis
 REDIS_PORT=6379
+REDIS_DB=0
 REDIS_PASSWORD=
 
 # =================================
@@ -40,15 +41,9 @@ ENVIRONMENT=development
 DEBUG=true
 LOG_LEVEL=INFO
 LOG_JSON=false
+AUTO_RELOAD=true
 
-# =================================
-# Database Configuration
-# =================================
-DB_HOST=your-database-host
-DB_PORT=3306
-DB_USER=your-db-user
-DB_PASSWORD=your-db-password
-DB_NAME=your-db-name
+API_KEY=your_api_key_here
 
 # =================================
 # Google Sheets Configuration
@@ -57,11 +52,15 @@ DB_NAME=your-db-name
 GOOGLE_SHEETS_CREDENTIALS_PATH=/app/credentials/google_sheets.json
 
 # Google Sheet ID for reading parameter ranges
-# (Extract from sheet URL: https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit)
 INPUT_SHEET_ID=your-input-sheet-id
 
 # Google Sheet ID for writing results
 OUTPUT_SHEET_ID=your-output-sheet-id
+
+# Worksheet (tab) names inside the Google Sheet
+INPUT_SHEET_NAME=Parameter Tuning
+OUTPUT_SHEET_NAME=Automated Results
+OUTPUT_PER_GENOME_SHEET_NAME=Automated Results Per Genome
 
 # =================================
 # Worker Configuration
@@ -74,17 +73,46 @@ FILE_WRITE_WORKER_TIMEOUT=60
 FILE_WRITE_WORKER_MAX_RETRIES=3
 
 # =================================
+# Worker Parallelization
+# =================================
+# Number of worker processes per container
+ALGORITHM_WORKER_COUNT=1
+RESULT_WORKER_COUNT=1
+FILE_WORKER_COUNT=1
+
+# Number of concurrent tasks per worker process
+WORKER_CONCURRENT_TASKS=1
+
+# =================================
+# Optimization Date Range
+# =================================
+OPTIMIZATION_START_DATE=2025-01-01
+OPTIMIZATION_END_DATE=2026-02-02
+
+# =================================
+# Algorithm Worker Debug Mode
+# =================================
+ALGORITHM_DEBUG=false
+LOG_PROGRESS_INTERVAL=100
+
+# =================================
 # Dashboard Configuration
 # =================================
 DASHBOARD_PORT=9181
-DASHBOARD_USERNAME=
-DASHBOARD_PASSWORD=
 
 # =================================
 # Health Check Configuration
 # =================================
 HEALTH_CHECK_INTERVAL=30
 HEALTH_CHECK_TIMEOUT=10
+
+# =================================
+# Smart Filtering Configuration
+# =================================
+SMART_FILTERING_ENABLED=true
+MIN_PAYOFF_RATIO=2
+OUT_PAYOFF_RATIO=1
+MIN_OBSERVATIONS=2
 ```
 
 ---
@@ -559,40 +587,20 @@ docker compose restart algorithm-worker result-worker file-write-worker
 **Error: "Credentials file not found"**
 ```powershell
 # Ensure credentials exist
-Test-Path credentials\service_account.json
+Test-Path credentials\google_sheets.json
 ```
 
 **Error: "Permission denied"**
 - Share Google Sheet with service account email
-- Check email in service_account.json: `client_email`
+- Check email in google_sheets.json: `client_email`
 - Grant Editor permissions in Google Sheets
 
 **Error: "Worksheet not found"**
-- Check sheet has tabs: "Parameter Tuning" and "Automated Results"
+- Check sheet has tabs matching your `INPUT_SHEET_NAME` and `OUTPUT_SHEET_NAME` env vars
+- Default tabs: "Parameter Tuning" and "Automated Results"
 - Verify sheet_id is correct
 
-### 10.4 Database Connection Issues
-
-**Check MySQL connection:**
-```powershell
-docker compose logs mysql
-```
-
-**Test database access:**
-```powershell
-docker compose exec mysql mysql -uuser -ppass -e "SHOW DATABASES;"
-```
-
-**Update .env if needed:**
-```
-DB_HOST=mysql
-DB_PORT=3306
-DB_USER=your_user
-DB_PASSWORD=your_pass
-DB_NAME=your_db
-```
-
-### 10.5 Optimization Not Starting
+### 10.4 Optimization Not Starting
 
 **Check API response:**
 - Look for `optimization_id` in response
@@ -614,7 +622,7 @@ Invoke-WebRequest -Uri "http://localhost:8000/api/v1/monitoring/queues" `
   -UseBasicParsing | Select-Object -ExpandProperty Content
 ```
 
-### 10.6 Clear Redis Queue (Emergency Reset)
+### 10.5 Clear Redis Queue (Emergency Reset)
 
 **WARNING: This deletes all queued tasks!**
 
@@ -623,7 +631,7 @@ docker compose exec redis redis-cli FLUSHALL
 docker compose restart algorithm-worker result-worker file-write-worker
 ```
 
-### 10.7 View All Logs
+### 10.6 View All Logs
 
 ```powershell
 # All services
@@ -675,13 +683,6 @@ ls -la credentials/
 docker-compose ps redis
 docker-compose logs redis
 ```
-
-### Issue: Database connection error
-
-**Solution:** 
-1. Verify `DB_*` environment variables
-2. Ensure database is accessible from Docker network
-3. Check firewall rules
 
 ---
 

@@ -36,8 +36,8 @@
 
 The algorithm worker system is a **three-stage queue-based pipeline** built on **Redis + RQ (Redis Queue)** that processes stock trading signals for Hong Kong equities. The system:
 
-1. **Algorithm Worker** (Queue 1) — Fetches OHLCV price data, iterates day-by-day through the entire date range, evaluates buy/sell conditions, and writes raw signal CSV files.
-2. **Result Worker** (Queue 2) — Reads the formatted CSV, calculates financial metrics (profit, win rate, payoff ratio), compares results against the reference API, and queues comparison data.
+1. **Algorithm Worker** (Queue 1) — Fetches OHLCV price data, iterates day-by-day through the entire date range, evaluates buy/sell conditions in memory, formats trade pairs, and stores them in Redis.
+2. **Result Worker** (Queue 2) — Loads trade pairs from Redis, calculates financial metrics (profit, win rate, payoff ratio), handles genome completion & smart filtering, compares results against the reference API, and queues comparison data.
 3. **File Write Worker** (Queue 3) — Persists comparison results to CSV files (thread-safe serialized writes).
 
 Each stock+genome combination flows through all three stages sequentially, but **multiple stocks/genomes are processed concurrently** across workers.
@@ -45,13 +45,14 @@ Each stock+genome combination flows through all three stages sequentially, but *
 ```
 ┌──────────────┐     ┌────────────────────┐     ┌───────────────────┐     ┌─────────────────┐
 │  API Request │────▶│ Algorithm Queue     │────▶│ Result Queue      │────▶│ File Write Queue│
-│  /algorithm  │     │ (algorithm_worker)  │     │ (result_worker)   │     │ (file_write)    │
+│  /start-test │     │ (algorithm_worker)  │     │ (result_worker)   │     │ (file_write)    │
 └──────────────┘     └────────────────────┘     └───────────────────┘     └─────────────────┘
                            │                          │                          │
                      Produces:                  Produces:                  Produces:
-                     - Raw signal CSV           - general_results.csv      - comparison_results.csv
-                     - Formatted trades CSV     - optimization_results.csv
+                     - Trade pairs (Redis)      - general_results.csv      - comparison_results.csv
+                                                - optimization_results.csv
                                                 - Automated Results.csv
+                                                - Automated Results Per Genome.csv
 ```
 
 ---
@@ -60,7 +61,7 @@ Each stock+genome combination flows through all three stages sequentially, but *
 
 ### 2.1 REST API Trigger
 
-The primary entry point is the **`GET /algorithm/`** endpoint defined in `app/controllers/algorithm_controller.py`:
+The primary entry point is the **`GET /api/v1/start-testing/`** endpoint defined in `app/controllers/algorithm_controller.py`:
 
 1. Reads a list of stock codes from `data/screener.csv`.
 2. Reads already-processed codes from `data/results.csv` to skip duplicates.
@@ -118,9 +119,20 @@ Configured via environment variables in `app/config/queue_config.py`:
 
 **File:** `app/workers/algorithm_worker.py`
 
-This is the core function enqueued to the `algorithm_calculation` queue. It receives `task_data` and executes four sequential steps.
+This is the core function enqueued to the `algorithm_calculation` queue. It receives `task_data` and executes the following steps.
 
-### 4.1 Task Initialization
+### 4.1 Smart Filtering Check
+
+Before any computation, if smart filtering is enabled (`SMART_FILTERING_ENABLED=true`), the worker checks:
+
+```python
+if SmartFilteringService.is_genome_skipped(optimization_id, genome_id):
+    # Skip entirely — increment progress and return early
+```
+
+This avoids wasting compute on genomes whose parameter values have already been eliminated by earlier results.
+
+### 4.2 Task Initialization
 
 ```python
 stock_code = task_data['stock']           # e.g. "3888"
@@ -132,29 +144,28 @@ params = AlgorithmParameters.from_dict(task_data.get('parameters', {}))
 Key initialization actions:
 1. **DB Pool Init** — `init_db_pool()` creates a global `aiomysql` connection pool (max 20 connections) to the MySQL database (used as fallback; primary fetch is via HTTP API).
 2. **SPY Cache Warm** — `warm_spy_cache(END_DATE)` pre-fetches reference index data (code `2800`) into Redis cache so all subsequent SPY lookups are instant.
-3. **Genome File Name** — Constructs `{stock_code}_{genome_id}` (e.g., `3888_G_001`) to avoid file conflicts during concurrent optimization runs.
 
-### 4.2 Step 1 — `get_data_and_save_to_csv`
+### 4.3 Step 1 — `compute_seed_row`
 
-**Purpose:** Creates the initial CSV file with a single seed row containing the starting state.
+**Purpose:** Creates the initial position state **in memory** (no file I/O).
 
 **Flow:**
 1. Fetches full historical OHLCV data for the stock via `get_stock_data_from_db(code, END_DATE)`.
 2. Determines `effective_date` — the later of `START_DATE` (env: `OPTIMIZATION_START_DATE`, default `2016-01-01`) or the first available data date.
-3. Creates a seed CSV row:
+3. Creates a seed row in memory:
 
 ```
 code | genome_id | tradeday       | position_status | next_open_action | E1-E5 | exit1 | close | entry_price | entry_date | exit_price
 3888 | G_000     | effective_date | F               | N                | 0     | 0     | 0     | 0           | 0          | 0
 ```
 
-4. Writes to `data/{stock_code}_{genome_id}.csv` via `FileService.add_data_to_csv()`.
+4. Returns the seed row as a dictionary (no file writes at this stage).
 
 The seed row establishes:
 - **`position_status = "F"`** (Free — no open position)
 - **`next_open_action = "N"`** (No action pending)
 
-### 4.3 Step 2 — `signals_for_the_period`
+### 4.4 Step 2 — `signals_for_the_period`
 
 **Purpose:** The main computation engine. Iterates through every trading day from `START_DATE` to `END_DATE`, evaluating buy/sell conditions and building signal records.
 
@@ -164,22 +175,23 @@ This is the most computationally intensive step. See [Section 7](#7-main-signal-
 1. Fetch OHLCV data for both the target stock and SPY (reference index `2800`).
 2. Convert raw dictionaries to `OHLCV` dataclass objects.
 3. Build date-to-index mappings for O(1) lookups.
-4. Read the latest signal from the CSV (the seed row from Step 1).
-5. Filter data to only dates after the latest signal's `tradeday`.
-6. Loop day-by-day:
-   - Slice historical data up to the current day.
+4. **Precompute all technical indicators** via `PrecomputedIndicators.compute_all()` — RSI, SMA, ATR, Bollinger Bands, etc. are calculated once upfront as numpy arrays.
+5. Use seed row from Step 1 as starting state.
+6. Filter data to only dates after the seed row's `tradeday`.
+7. Loop day-by-day:
+   - Use precomputed index for O(1) indicator lookups.
    - Calculate energy indicators (E1–E5).
-   - If **Free (F)**: evaluate all buy conditions → if buy, transition to **In-Position (I)**.
-   - If **In-Position (I)**: evaluate all sell conditions → if sell, transition to **Free (F)**.
-   - Append result row to batch.
-7. Write all accumulated rows to CSV in one batch.
+   - If **Free (F)**: `run_all_buy_conditions_fast()` with precomputed arrays → if buy, transition to **In-Position (I)**.
+   - If **In-Position (I)**: `run_all_sell_conditions_fast()` with precomputed arrays → if sell, transition to **Free (F)**.
+   - Append result row to in-memory batch.
+8. Return all accumulated rows as `list[dict]` (no file I/O).
 
-### 4.4 Step 3 — `format_signals_csv_inplace`
+### 4.5 Step 3 — `format_signals_in_memory`
 
-**Purpose:** Transforms the raw day-by-day signal CSV into a **trade-summary format** showing completed trades with entry/exit prices and gain/loss percentages.
+**Purpose:** Transforms the raw day-by-day signal list into a **trade-summary format** showing completed trades with entry/exit prices and gain/loss percentages. All processing is in memory.
 
 **Flow:**
-1. Reads the full raw CSV file.
+1. Takes the in-memory signal rows from Step 2.
 2. Finds all rows where `next_open_action == "S"` (sell signal).
 3. For each sell-signal row:
    - Extract `entry_price`, `entry_date` from the row.
@@ -187,7 +199,7 @@ This is the most computationally intensive step. See [Section 7](#7-main-signal-
    - Calculate `Gain/Lose = ((exit_price - entry_price) / entry_price) * 100`.
 4. Detects any **open position** (a buy signal after the last sell with no subsequent sell).
 5. Filters trades to only those within the `START_DATE` to `END_DATE` range.
-6. **Overwrites** the CSV with the formatted output:
+6. Returns formatted trade pairs as `list[dict]`:
 
 ```
 Genome ID | Buy Signal | Stop Signal   | Entry price | Exit price | Gain/Lose
@@ -195,21 +207,26 @@ G_000     | 2020-03-25 | 2020-06-15    | 12.500      | 14.200     | 13.60
 G_000     | 2021-01-10 | Open position | 18.300      | Open pos   | 5.20
 ```
 
-### 4.5 Step 4 — Enqueue to Result Processing
+### 4.6 Step 4 — Store in Redis & Enqueue to Result Processing
 
-After the CSV is formatted, the task is pushed to the **result processing queue**:
+After formatting, the trade pairs are stored in Redis and the task is pushed to the **result processing queue**:
 
 ```python
+# Store trade pairs in Redis (TTL 1 hour)
+redis_key = f"trade_pairs:{optimization_id}:{stock_code}:{genome_id}"
+_store_trade_pairs_in_redis(redis_key, trade_pairs)
+
+# Enqueue to Stage 2
 QueueService.add_to_result_processing_queue(
     stock_code,
     genome_id=genome_id,
     parameters=params.to_dict(),
     optimization_id=optimization_id,
-    results={"genome_file_name": genome_file_name}
+    results={}
 )
 ```
 
-The `genome_file_name` is passed in `results` metadata so the result worker knows which CSV to read.
+Trade pairs are passed via **Redis keys** (not queue payload or temp files), keeping queue messages lightweight.
 
 ---
 
@@ -477,24 +494,27 @@ Triggered by the algorithm worker via `QueueService.add_to_result_processing_que
 
 ### Processing Steps
 
-1. **Load CSV** — Reads the formatted trade CSV (`{stock}_{genome_id}.csv`).
-2. **Save Financial Results** — Writes to `general_results.csv` with per-trade USD profit calculations (assuming $10,000 fixed investment per trade).
+1. **Load Trade Pairs from Redis** — Reads and deletes `trade_pairs:{optimization_id}:{stock_code}:{genome_id}` from Redis.
+2. **Save Financial Results** — Writes to `general_results.csv` with per-trade USD profit calculations (vectorized pandas, assuming $10,000 fixed investment per trade).
 3. **Genome Optimization Results** — If part of optimization, calculates aggregated metrics via `calculate_genome_metrics()`:
    - Trade count, win/loss counts
-   - Total win/loss amounts
-   - Average win/loss
+   - Total win/loss amounts, average win/loss
    - Payoff ratio (avg win / avg loss)
-   - Win rate percentage
-   - Total profit and profit percentage
-   - Writes to `optimization_results.csv` and `Automated Results.csv`
-   - Stores result in Redis for Google Sheets output
-4. **API Comparison** — Fetches reference signals from StockFisher API (`verifyType=signal`) and compares:
+   - Win rate percentage, total profit and profit percentage
+   - Writes per-stock results to `optimization_results.csv` and `Automated Results Per Genome.csv`
+   - Stores per-stock result in Redis via `OptimizationService.store_genome_result()`
+4. **Genome Completion Check** — When all stocks for a genome are processed:
+   - Computes **averaged metrics** across all stocks
+   - Calculates **deltas vs BASE (G_000)** for profit and win rate
+   - Writes averaged row to `Automated Results.csv` and Google Sheets
+   - **Smart filtering trigger**: calls `SmartFilteringService.record_genome_result()` and `check_and_eliminate()` to potentially eliminate underperforming parameter values from future genomes
+5. **API Comparison** — Fetches reference signals from StockFisher API (`verifyType=signal`) and compares:
    - **Exact matches**: buy/sell dates match perfectly.
    - **Deviations**: within ±2 trading day tolerance.
    - **Unmatched**: signals present in API but not in algo (or vice versa).
    - Calculates `match_percent` for accuracy tracking.
-5. **Queue File Write** — Pushes comparison results to the file write queue.
-6. **Cleanup** — Deletes the temporary genome-specific CSV file.
+6. **Queue File Write** — Pushes comparison results to the file write queue.
+7. **Update Progress** — `OptimizationService.increment_completed_tasks()` updates optimization tracking.
 
 ---
 
@@ -563,6 +583,16 @@ Contains ~60+ configurable parameters controlling all buy/sell conditions. Defau
 
 ## 13. Performance Optimizations
 
+### Computation Optimizations
+
+| Optimization | Location | Technique |
+|-------------|----------|----------|
+| **Precomputed indicators** | `PrecomputedIndicators.compute_all()` | All technical indicators (RSI, SMA, ATR, Bollinger Bands, slopes) computed once upfront as numpy arrays; signal checks are O(1) array lookups |
+| **Fast signal functions** | `run_all_buy_conditions_fast()`, `run_all_sell_conditions_fast()` | Use precomputed arrays instead of recalculating per day |
+| **In-memory processing** | `compute_seed_row()`, `format_signals_in_memory()` | No file I/O during signal generation; all intermediate data stays in memory |
+| **Redis trade-pair passing** | `_store_trade_pairs_in_redis()` | Trade pairs passed between Stage 1→Stage 2 via Redis keys (TTL 1h), not temp files or queue payload |
+| **Smart filtering** | `SmartFilteringService` | Eliminates underperforming parameter combinations early, skipping entire genome computations |
+
 ### Data Access Optimizations
 
 | Optimization | Location | Technique |
@@ -577,9 +607,10 @@ Contains ~60+ configurable parameters controlling all buy/sell conditions. Defau
 
 | Optimization | Location | Technique |
 |-------------|----------|-----------|
-| **Batch CSV writes** | `append_to_signals_csv()` | Accumulates all rows in memory, writes once at end |
+| **Batch CSV writes** | `FileService.add_data_to_csv()` | Accumulates rows and writes in batches |
 | **Buffered CSV writer** | `BufferedCSVWriter` | Flushes every 1000 rows instead of per-row |
 | **Atomic writes** | `write_csv_atomic()` | Write to temp file, then rename to prevent corruption |
+| **Vectorized pandas** | `save_financial_results()` | Vectorized profit calculation instead of `iterrows()` |
 
 ### Profiling Infrastructure
 
@@ -686,7 +717,8 @@ app/
 │       ├── sell_signals.py          # Sell conditions S1-S17 + isSell
 │       ├── get_code_energy.py       # Energy indicators E1-E5
 │       ├── get_db_data.py           # Data fetching (API + cache)
-│       └── precomputed_indicators.py # (Disabled) Pre-computed indicator optimization
+│       ├── precomputed_indicators.py # Pre-computed indicator arrays for O(1) lookups
+│       └── types.py                 # OHLCV dataclass and data types
 │
 ├── models/
 │   └── algorithm_models.py          # AlgorithmParameters, ParameterRange, GenomeResult
@@ -696,14 +728,25 @@ app/
 │   ├── file_service.py              # CSV I/O (buffered, atomic)
 │   ├── data_cache_service.py        # Redis data caching layer
 │   ├── optimization_service.py      # Genome optimization orchestration
+│   ├── smart_filtering_service.py   # Toxic parameter elimination
+│   ├── sheets_service.py            # Google Sheets integration
+│   ├── genome_service.py            # Genome generation & parameter permutation
+│   ├── get_all_stocks.py            # HK stock codes fetcher
 │   └── results_aggregation_service.py # Financial metrics calculation
 │
 ├── config/
 │   ├── queue_config.py              # Redis connection + queue setup
-│   └── logging_config.py           # Log configuration & debug flags
+│   ├── logging_config.py            # Log configuration & debug flags
+│   └── smart_filtering_config.py    # Smart filtering env var config
 │
 ├── controllers/
-│   └── algorithm_controller.py      # REST API entry point
+│   ├── algorithm_controller.py      # REST API — start testing
+│   ├── optimization_controller.py   # REST API — optimization CRUD
+│   ├── monitoring_controller.py     # REST API — queue & worker status
+│   ├── summary_controller.py        # REST API — generate trading summary
+│   ├── genome_controller.py         # REST API — genome parameter lookup
+│   ├── sheets_controller.py         # REST API — Google Sheets health check
+│   └── dashboard_controller.py      # HTML dashboard for optimization monitoring
 │
 └── utils/
     └── performance_profiler.py      # Timing decorators & metrics
@@ -725,15 +768,40 @@ data/                                # Runtime CSV output directory
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| **API & Service** | | |
 | `API_KEY` | (required) | StockFisher API authentication key |
-| `OPTIMIZATION_START_DATE` | `2016-01-01` | Start of analysis date range |
+| `API_PORT` | `8000` | HTTP port for the FastAPI service |
+| `ENVIRONMENT` | `development` | Runtime environment |
+| `DEBUG` | `true` | Enable debug mode |
+| **Date Range** | | |
+| `OPTIMIZATION_START_DATE` | `2025-01-01` | Start of analysis date range |
 | `OPTIMIZATION_END_DATE` | `2026-02-02` | End of analysis date range |
+| **Redis** | | |
 | `REDIS_HOST` | `localhost` | Redis server hostname |
 | `REDIS_PORT` | `6379` | Redis server port |
+| `REDIS_DB` | `0` | Redis database number |
+| **Worker Parallelization** | | |
 | `ALGORITHM_WORKER_COUNT` | `1` | Number of algorithm worker processes |
-| `ALGORITHM_CONCURRENT_TASKS` | `1` | Threads per algorithm worker |
+| `RESULT_WORKER_COUNT` | `1` | Number of result worker processes |
+| `FILE_WORKER_COUNT` | `1` | Number of file write worker processes |
+| `WORKER_CONCURRENT_TASKS` | `1` | Threads per worker (in-worker parallelization) |
+| **Worker Timeouts** | | |
 | `ALGORITHM_WORKER_TIMEOUT` | `1000` | Max seconds per algorithm task |
 | `RESULT_WORKER_TIMEOUT` | `300` | Max seconds per result task |
 | `FILE_WRITE_WORKER_TIMEOUT` | `60` | Max seconds per file write task |
-| `ALGORITHM_DEBUG` | `false` | Enable detailed debug logging |
-| `LOG_PROGRESS_INTERVAL` | (config) | Log progress every N days |
+| **Google Sheets** | | |
+| `GOOGLE_SHEETS_CREDENTIALS_PATH` | `/app/credentials/google_sheets.json` | Path to Google Sheets service account JSON |
+| `INPUT_SHEET_ID` | (required) | Google Sheets spreadsheet ID for input |
+| `OUTPUT_SHEET_ID` | (required) | Google Sheets spreadsheet ID for output |
+| `INPUT_SHEET_NAME` | `Parameter Tuning` | Input worksheet (tab) name |
+| `OUTPUT_SHEET_NAME` | `Automated Results` | Output worksheet name (also used for CSV filename) |
+| `OUTPUT_PER_GENOME_SHEET_NAME` | `Automated Results Per Genome` | Per-genome output worksheet name |
+| **Smart Filtering** | | |
+| `SMART_FILTERING_ENABLED` | `true` | Enable toxic parameter elimination |
+| `MIN_PAYOFF_RATIO` | `2` | Minimum payoff ratio to keep a genome |
+| `OUT_PAYOFF_RATIO` | `1` | Payoff ratio threshold for elimination |
+| `MIN_OBSERVATIONS` | `2` | Minimum observations before filtering |
+| **Logging & Debug** | | |
+| `LOG_LEVEL` | `INFO` | Log level (DEBUG, INFO, WARNING, ERROR) |
+| `ALGORITHM_DEBUG` | `false` | Enable detailed debug/profiling logging |
+| `LOG_PROGRESS_INTERVAL` | `100` | Log progress every N trade days |

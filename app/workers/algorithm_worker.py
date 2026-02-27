@@ -1,21 +1,29 @@
-import pandas as pd
-import numpy as np
+import json
 import logging
 import os
-import requests
-from datetime import datetime
 from bisect import bisect_right
-from typing import Optional, Dict, Any, List, Union
+from datetime import datetime
+from typing import Any
 
-from app.services.queue_service import QueueService
-from app.workers.algo_func.get_db_data import get_stock_data_from_db, init_db_pool, warm_spy_cache
-from app.workers.algo_func.buy_signals import runAllBuyConditions, isBuy, OHLCV
-from app.workers.algo_func.sell_signals import runAllSellConditions, isSell
-from app.workers.algo_func.get_code_energy import calculate_energy_indicators_last_16_days
-from app.workers.algo_func.precomputed_indicators import PrecomputedIndicators, is_buy_fast
-from app.models.algorithm_models import AlgorithmParameters
+import numpy as np
+import pandas as pd
+
 from app.config.logging_config import get_algorithm_debug_mode, get_log_progress_interval
+from app.config.smart_filtering_config import SMART_FILTERING_ENABLED
+from app.models.algorithm_models import AlgorithmParameters
+from app.services.optimization_service import OptimizationService
+from app.services.queue_service import QueueService
+from app.services.smart_filtering_service import SmartFilteringService
 from app.utils.performance_profiler import timed, TimingContext, get_profiler
+from app.workers.algo_func.buy_signals import runAllBuyConditions, isBuy, OHLCV
+from app.workers.algo_func.get_code_energy import calculate_energy_indicators_last_16_days
+from app.workers.algo_func.get_db_data import get_stock_data_from_db, init_db_pool, warm_spy_cache
+from app.workers.algo_func.precomputed_indicators import (
+    OHLCV as PrecompOHLCV,
+    PrecomputedIndicators,
+    is_buy_fast,
+)
+from app.workers.algo_func.sell_signals import runAllSellConditions, isSell
 
 logger = logging.getLogger(__name__)
 API_KEY = os.getenv('API_KEY')
@@ -29,12 +37,12 @@ ALGORITHM_DEBUG = get_algorithm_debug_mode()
 LOG_INTERVAL = get_log_progress_interval()
 
 
-def _build_date_index(data: List[OHLCV]) -> Dict[str, int]:
+def _build_date_index(data: list[OHLCV]) -> dict[str, int]:
     """Build a date-to-index mapping for O(1) lookups."""
     return {bar.date: i for i, bar in enumerate(data)}
 
 
-def _find_end_index(date_index: Dict[str, int], sorted_dates: List[str], target_date: str, data_len: int) -> int:
+def _find_end_index(date_index: dict[str, int], sorted_dates: list[str], target_date: str, data_len: int) -> int:
     """Find the index for slicing data up to target_date inclusive."""
     if target_date in date_index:
         return date_index[target_date]
@@ -45,8 +53,8 @@ def _find_end_index(date_index: Dict[str, int], sorted_dates: List[str], target_
 
 
 @timed("algorithm_task_total")
-async def process_algorithm_task(task_data):
-    """Воркер для обробки алгоритмів (перша черга)"""
+async def process_algorithm_task(task_data: dict[str, Any]) -> dict[str, Any]:
+    """Worker for algorithm processing (first queue)."""
     try:
         stock_code = task_data['stock']
         genome_id = task_data.get('genome_id', 'G_000')
@@ -57,14 +65,11 @@ async def process_algorithm_task(task_data):
         logger.info(f"Processing algorithm task: {stock_code}, genome: {genome_id}, optimization: {optimization_id}")
         
         # Smart filtering — skip check (before any DB/computation)
-        from app.config.smart_filtering_config import SMART_FILTERING_ENABLED
         if SMART_FILTERING_ENABLED and optimization_id and genome_id != "G_000":
-            from app.services.smart_filtering_service import SmartFilteringService
             if SmartFilteringService.is_genome_skipped(optimization_id, genome_id):
                 # Increment by 1 per task (not batch) to avoid over-counting
                 # when some stocks already completed through the result worker.
                 try:
-                    from app.services.optimization_service import OptimizationService
                     OptimizationService.increment_completed_tasks(optimization_id, count=1)
                 except Exception as e:
                     logger.warning(f"Failed to increment tasks for skipped genome {genome_id}: {e}")
@@ -119,7 +124,7 @@ async def process_algorithm_task(task_data):
 
 
 def compute_seed_row(code: str, trade_date: str, genome_id: str = "G_000",
-                     code_data_raw=None) -> Dict[str, Any]:
+                     code_data_raw: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Compute the initial seed row in memory (no file I/O)."""
     effective_date = trade_date
     if code_data_raw and code_data_raw[0]["date"] > trade_date:
@@ -136,24 +141,33 @@ def compute_seed_row(code: str, trade_date: str, genome_id: str = "G_000",
     }
 
 
-def _store_trade_pairs_in_redis(optimization_id, stock_code, genome_id, trade_pairs):
+def _store_trade_pairs_in_redis(
+    optimization_id: str | None,
+    stock_code: str,
+    genome_id: str,
+    trade_pairs: list[dict[str, Any]],
+) -> None:
     """Store formatted trade pairs in Redis for the result worker to consume."""
-    import json
     client = QueueService.get_redis_client()
     key = f"trade_pairs:{optimization_id or 'single'}:{stock_code}:{genome_id}"
     client.set(key, json.dumps(trade_pairs), ex=3600)  # TTL 1 hour
 
 
 @timed("signals_for_the_period")
-async def signals_for_the_period(code, trade_date, params: AlgorithmParameters = None, 
-                                  genome_id: str = "G_000",
-                                  code_data_raw=None, spy_data_raw=None,
-                                  initial_signal=None) -> List[Dict[str, Any]]:
+async def signals_for_the_period(
+    code: str,
+    trade_date: str,
+    params: AlgorithmParameters | None = None, 
+    genome_id: str = "G_000",
+    code_data_raw: list[dict[str, Any]] | None = None,
+    spy_data_raw: list[dict[str, Any]] | None = None,
+    initial_signal: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Main signal calculation loop. Returns signals batch in memory (no file I/O)."""
     if params is None:
         params = AlgorithmParameters()
     
-    print("start")
+    logger.debug("Starting signal calculation for %s", code)
     
     if spy_data_raw is None:
         with TimingContext("fetch_spy_data"):
@@ -187,7 +201,6 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
         code_dates_sorted = [bar.date for bar in code_data]
     
     with TimingContext("precompute_indicators"):
-        from app.workers.algo_func.precomputed_indicators import OHLCV as PrecompOHLCV
         precomp_code = [PrecompOHLCV(b.date, b.open, b.high, b.low, b.close, b.volume) for b in code_data]
         precomp_spy = [PrecompOHLCV(b.date, b.open, b.high, b.low, b.close, b.volume) for b in spy_data]
         precomputed = PrecomputedIndicators(precomp_code, precomp_spy, params)
@@ -205,7 +218,7 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
         if bar.date > _raw_td:
             filtered_code_data.append(bar)
 
-    results_batch: List[Dict[str, Any]] = []
+    results_batch: list[dict[str, Any]] = []
     total_days = len(filtered_code_data)
 
     with TimingContext("main_signal_loop"):
@@ -222,8 +235,8 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
 
             if position_status == "F":
                 # logger.info(f"Buy - {tradeday_str}")
-                buySignals = precomputed.run_all_buy_conditions_fast(code_end_idx)
-                buy = is_buy_fast(buySignals)
+                buy_signals = precomputed.run_all_buy_conditions_fast(code_end_idx)
+                buy = is_buy_fast(buy_signals)
 
                 exit_price = 0
                 if latest_signal['next_open_action'] == "S":
@@ -240,7 +253,7 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
                     "E3": 0,
                     "E4": 0,
                     "E5": 0,
-                    "exit1": buySignals.get("stopLoss"),
+                    "exit1": buy_signals.get("stopLoss"),
                     "entry_price": code_data[code_end_idx].close if code_end_idx >= 0 else None,
                     "close": code_data[code_end_idx].close if code_end_idx >= 0 else None,
                     "entry_date": 0,
@@ -249,7 +262,7 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
                 latest_signal = {
                     "entry_date": tradeday_str,
                     "entry_price": code_data[code_end_idx].close if code_end_idx >= 0 else 0,
-                    "exit1": buySignals.get("stopLoss"),
+                    "exit1": buy_signals.get("stopLoss"),
                     "position_status": "I" if buy else "F",
                     "next_open_action": "B" if buy else "N",
                 }
@@ -268,7 +281,7 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
                 exit1 = to_float_or_none(latest_signal.get("exit1"))
 
                 # Pre-computed sell evaluation — all O(1) lookups
-                sellSignals = precomputed.run_all_sell_conditions_fast(
+                sell_signals = precomputed.run_all_sell_conditions_fast(
                     code_end_idx, buy_idx, to_float_or_none(entry_price), exit1
                 )
 
@@ -277,10 +290,10 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
 
                 if ALGORITHM_DEBUG:
                     logger.debug(f'Trade day: {tradeday_str}, stock: {code}, genome: {genome_id}')
-                    logger.debug(f'Sell signals: {sellSignals}')
+                    logger.debug(f'Sell signals: {sell_signals}')
 
-                sell = isSell(sellSignals['conditions'])
-                new_stop_loss = sellSignals['stop_loss']
+                sell = isSell(sell_signals['conditions'])
+                new_stop_loss = sell_signals['stop_loss']
 
                 result = {
                     "code": code,
@@ -313,7 +326,7 @@ async def signals_for_the_period(code, trade_date, params: AlgorithmParameters =
     return results_batch
 
 
-def to_float_or_none(v):
+def to_float_or_none(v: Any) -> float | None:
     if v is None:
         return None
     if isinstance(v, (int, float)):
@@ -328,7 +341,7 @@ def to_float_or_none(v):
         return None
 
 
-def _to_float_or_none(v):
+def _to_float_or_none(v: Any) -> float | None:
     if v is None:
         return None
     if isinstance(v, (int, float, np.floating)):
@@ -343,7 +356,7 @@ def _to_float_or_none(v):
         return None
 
 
-def _to_date_str_or_none(v):
+def _to_date_str_or_none(v: Any) -> str | None:
     if v is None:
         return None
     try:
@@ -353,9 +366,9 @@ def _to_date_str_or_none(v):
 
 
 def format_signals_in_memory(
-    rows_raw: List[Dict[str, Any]],
+    rows_raw: list[dict[str, Any]],
     genome_id: str = "G_000",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Format raw signal rows into trade-pair summaries, entirely in memory.
     Returns list of dicts with keys: Genome ID, Buy Signal, Stop Signal,
@@ -379,7 +392,7 @@ def format_signals_in_memory(
 
     df = df.reset_index(drop=True)
 
-    result_rows: List[Dict[str, Any]] = []
+    result_rows: list[dict[str, Any]] = []
 
     s_rows = df[df["next_open_action"] == "S"]
 

@@ -10,7 +10,7 @@ Two elimination paths:
 """
 import json
 import logging
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any
 
 from app.config.smart_filtering_config import (
     MIN_PAYOFF_RATIO,
@@ -37,8 +37,8 @@ class SmartFilteringService:
     SKIP_INCR_KEY = "smart_filter:skip_incremented:{opt_id}"
     ELIMINATED_KEY = "smart_filter:eliminated:{opt_id}"
 
-    @staticmethod
-    def get_redis_client():
+    @classmethod
+    def get_redis_client(cls):
         from app.services.queue_service import QueueService
         return QueueService.get_redis_client()
 
@@ -48,8 +48,8 @@ class SmartFilteringService:
     def store_genome_params(
         cls,
         optimization_id: str,
-        genomes: List[Dict[str, Any]],
-        variable_param_names: List[str],
+        genomes: list[dict[str, Any]],
+        variable_param_names: list[str],
     ) -> None:
         """
         Called once during optimization creation.
@@ -77,7 +77,7 @@ class SmartFilteringService:
         )
 
     @classmethod
-    def _get_genome_params(cls, optimization_id: str) -> Dict[str, Dict[str, Any]]:
+    def _get_genome_params(cls, optimization_id: str) -> dict[str, dict[str, Any]]:
         """Load genome-params mapping from Redis."""
         client = cls.get_redis_client()
         key = cls.GENOMES_KEY.format(opt_id=optimization_id)
@@ -115,7 +115,7 @@ class SmartFilteringService:
         optimization_id: str,
         genome_id: str,
         avg_payoff_ratio: float,
-        param_values: Dict[str, Any],
+        param_values: dict[str, Any],
     ) -> None:
         """
         Record averaged Payoff Ratio for a completed genome.
@@ -158,8 +158,8 @@ class SmartFilteringService:
         optimization_id: str,
         genome_id: str,
         avg_payoff_ratio: float,
-        param_values: Dict[str, Any],
-    ) -> List[Tuple[str, Any]]:
+        param_values: dict[str, Any],
+    ) -> list[tuple[str, Any]]:
         """
         Check if any parameter value should be eliminated.
 
@@ -262,7 +262,7 @@ class SmartFilteringService:
         optimization_id: str,
         param_name: str,
         param_value: Any,
-        evidence: Dict[str, Any],
+        evidence: dict[str, Any],
     ) -> None:
         """
         Eliminate a toxic parameter value:
@@ -305,7 +305,7 @@ class SmartFilteringService:
     # --- Monitoring ---
 
     @classmethod
-    def get_filtering_summary(cls, optimization_id: str) -> Dict[str, Any]:
+    def get_filtering_summary(cls, optimization_id: str) -> dict[str, Any]:
         """Return summary dict for progress API and logging."""
         client = cls.get_redis_client()
 

@@ -1,8 +1,8 @@
-import numpy as np
-from typing import List, Dict, Optional, Union
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
 from datetime import datetime
+
+import numpy as np
 
 from app.models.algorithm_models import AlgorithmParameters
 
@@ -15,7 +15,7 @@ class OHLCV:
     high: float
     low: float
     close: float
-    volume: Optional[float] = None
+    volume: float | None = None
 
 # Utility functions
 def to_ts(date):
@@ -32,7 +32,7 @@ def to_ts(date):
     except (ValueError, TypeError):
         raise ValueError(f"Invalid date: {date}")
 
-def sma(values: List[float], period: int) -> List[float]:
+def sma(values: list[float], period: int) -> list[float]:
     if len(values) < period:
         return []
     
@@ -42,7 +42,7 @@ def sma(values: List[float], period: int) -> List[float]:
         result.append(sum(window) / period)
     return result
 
-def bollinger_bands(values: List[float], period: int, std_dev: float) -> List[Dict[str, float]]:
+def bollinger_bands(values: list[float], period: int, std_dev: float) -> list[dict[str, float]]:
     if len(values) < period:
         return []
     
@@ -65,7 +65,7 @@ def bollinger_bands(values: List[float], period: int, std_dev: float) -> List[Di
         })
     return result
 
-def mean(arr: List[float]) -> float:
+def mean(arr: list[float]) -> float:
     return sum(arr) / len(arr) if arr else 0.0
 
 def condition8_b18(closes: list[float], params: AlgorithmParameters = None) -> bool:
@@ -136,7 +136,7 @@ def atr(highs, lows, closes, period):
     return atr_values
 
 
-def checkB1(ohlcv: List[OHLCV], targetDate, params: AlgorithmParameters = None) -> bool:
+def checkB1(ohlcv: list[OHLCV], targetDate, params: AlgorithmParameters = None) -> bool:
     if params is None:
         params = AlgorithmParameters()
     
@@ -180,7 +180,7 @@ def checkB1(ohlcv: List[OHLCV], targetDate, params: AlgorithmParameters = None) 
     return ((condNew20DHigh or condBB) and condCloseInUpperRange)
 
 
-def linear_reg_value_mc(series: List[float], length: int, tgt_bar: int) -> float:
+def linear_reg_value_mc(series: list[float], length: int, tgt_bar: int) -> float:
     if length <= 0 or len(series) < length:
         return 0.0
     window = series[-length:]
@@ -206,7 +206,7 @@ def linear_reg_value_mc(series: List[float], length: int, tgt_bar: int) -> float
 
     return a * tgt_bar + b
 
-def slope_sma_bbw_mc(sma_bbw: List[float], length: int) -> float:
+def slope_sma_bbw_mc(sma_bbw: list[float], length: int) -> float:
     if len(sma_bbw) < length:
         return 0.0
 
@@ -216,7 +216,7 @@ def slope_sma_bbw_mc(sma_bbw: List[float], length: int) -> float:
 
     return slope1
 
-def checkB3(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
+def checkB3(ohlcv: list[OHLCV], params: AlgorithmParameters = None) -> bool:
     if params is None:
         params = AlgorithmParameters()
     
@@ -234,7 +234,7 @@ def checkB3(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
     if len(bb) < SMA_BBW_LEN + LR_LEN:
         return False
 
-    bbw: List[float] = []
+    bbw: list[float] = []
     for i, b in enumerate(bb):
         m = b["middle"]
         if m == 0:
@@ -254,7 +254,7 @@ def checkB3(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
     return slope < 0
 
 
-def checkB8(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
+def checkB8(ohlcv: list[OHLCV], params: AlgorithmParameters = None) -> bool:
     if params is None:
         params = AlgorithmParameters()
     
@@ -275,7 +275,7 @@ def checkB8(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
     return recent_low > pastMinRange
 
 
-def checkB9(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
+def checkB9(ohlcv: list[OHLCV], params: AlgorithmParameters = None) -> bool:
     if params is None:
         params = AlgorithmParameters()
     
@@ -306,7 +306,7 @@ def checkB9(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
     return not (condCloseBelowMid and condHighEarlierThanLow)
 
 
-def checkB10(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
+def checkB10(ohlcv: list[OHLCV], params: AlgorithmParameters = None) -> bool:
     if params is None:
         params = AlgorithmParameters()
     
@@ -327,11 +327,11 @@ def checkB10(ohlcv: List[OHLCV], params: AlgorithmParameters = None) -> bool:
     return daysSinceLow >= prox_days
 
 
-def lewis_atr(highs: List[float], lows: List[float], closes: List[float], period: int) -> List[Optional[float]]:
+def lewis_atr(highs: list[float], lows: list[float], closes: list[float], period: int) -> list[float | None]:
     n = len(highs)
     if n < 2:
         return [None] * n
-    atr_values: List[Optional[float]] = [None] * n
+    atr_values: list[float | None] = [None] * n
     
     prev_atr = 0.0
     
@@ -349,7 +349,7 @@ def lewis_atr(highs: List[float], lows: List[float], closes: List[float], period
 
     return atr_values
 
-def checkB11(ohlcv: List["OHLCV"], params: AlgorithmParameters = None) -> bool:
+def checkB11(ohlcv: list[OHLCV], params: AlgorithmParameters = None) -> bool:
     if params is None:
         params = AlgorithmParameters()
     
@@ -379,7 +379,7 @@ def checkB11(ohlcv: List["OHLCV"], params: AlgorithmParameters = None) -> bool:
 
 
 def checkB12(
-    ohlcv: List["OHLCV"],
+    ohlcv: list[OHLCV],
     params: AlgorithmParameters = None
 ) -> bool:
     if params is None:
@@ -416,8 +416,8 @@ def checkB12(
 
 
 def checkB13(
-    ohlcvStock: List[OHLCV],
-    ohlcvIndex: List[OHLCV],
+    ohlcvStock: list[OHLCV],
+    ohlcvIndex: list[OHLCV],
     params: AlgorithmParameters = None
 ) -> bool:
     if params is None:
@@ -461,7 +461,7 @@ def checkB13(
     return not underperformAll
 
 
-def checkB18(ohlcv: List[OHLCV], targetDate: str, params: AlgorithmParameters = None) -> bool:
+def checkB18(ohlcv: list[OHLCV], targetDate: str, params: AlgorithmParameters = None) -> bool:
     if params is None:
         params = AlgorithmParameters()
     
@@ -511,7 +511,7 @@ def checkB18(ohlcv: List[OHLCV], targetDate: str, params: AlgorithmParameters = 
     return cond1 and cond2 and cond3 and cond4 and cond5 and cond6 and cond7 and cond8
 
 
-def wilder_atr(highs: List[float], lows: List[float], closes: List[float], period: int) -> List[float]:
+def wilder_atr(highs: list[float], lows: list[float], closes: list[float], period: int) -> list[float]:
     if len(highs) < period + 1:
         return []
 
@@ -534,8 +534,8 @@ def wilder_atr(highs: List[float], lows: List[float], closes: List[float], perio
 
     return atr_values
 
-def calcS1Stop(ohlcv: List[OHLCV], params: AlgorithmParameters = None,
-               entryClose: Optional[float] = None) -> float:
+def calcS1Stop(ohlcv: list[OHLCV], params: AlgorithmParameters = None,
+               entryClose: float | None = None) -> float:
     if params is None:
         params = AlgorithmParameters()
     
@@ -572,8 +572,8 @@ def calcS1Stop(ohlcv: List[OHLCV], params: AlgorithmParameters = None,
         return round(close * (1 - medium_stop), 4)   
     return round(baseStop, 4)
 
-def runAllBuyConditions(ohlcv: List[OHLCV], targetDate: str, spyData: List[OHLCV], 
-                        params: AlgorithmParameters = None) -> Dict[str, Union[bool, float]]:
+def runAllBuyConditions(ohlcv: list[OHLCV], targetDate: str, spyData: list[OHLCV], 
+                        params: AlgorithmParameters = None) -> dict[str, bool | float]:
     if params is None:
         params = AlgorithmParameters()
         
@@ -592,7 +592,7 @@ def runAllBuyConditions(ohlcv: List[OHLCV], targetDate: str, spyData: List[OHLCV
         'stopLoss': calcS1Stop(ohlcv, params)
     }
 
-def isBuy(signals: Dict[str, Union[bool, float]]) -> bool:
+def isBuy(signals: dict[str, bool | float]) -> bool:
     return bool((signals['B1'] and signals['B3'] and signals['B8'] and 
             signals['B9'] and signals['B10'] and signals['B11'] and 
             signals['B12'] and signals['B13']) or signals['B18'])

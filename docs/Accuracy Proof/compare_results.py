@@ -6,9 +6,9 @@ with per-trade buy/sell match analysis for debugging optimized logic.
 import pandas as pd
 import numpy as np
 
-ORIG_FILE = "data/results_orig_aggregated.csv"
-NEW_FILE = "data/results_new.csv"
-OUTPUT_FILE = "data/results_comparation.csv"
+ORIG_FILE = "data/Comparation 4/results_orig.csv"
+NEW_FILE = "data/Comparation 4/results_new.csv"
+OUTPUT_FILE = "data/Comparation 4/results_comparation.csv"
 
 
 def compare_results():
@@ -52,9 +52,6 @@ def compare_results():
                     "close" if abs(entry_price_diff) < 0.1 else "different"
                 )
 
-                # Date-based buy match (algorithm correctness — ignores data source price differences)
-                buy_date_match = "exact"  # dates already matched by join logic
-
                 if o["exitDay"] == n["exitDay"]:
                     sell_match = "exact"
                 elif exit_day_diff_days is not None and abs(exit_day_diff_days) <= 2:
@@ -76,7 +73,6 @@ def compare_results():
                     "symbol": stock,
                     "match_type": "matched",
                     "buy_match": buy_match,
-                    "buy_date_match": buy_date_match,
                     "sell_match": sell_match,
                     "direction_match": direction_match,
                     "orig_entryDay": o["entryDay"],
@@ -105,7 +101,6 @@ def compare_results():
                     "symbol": stock,
                     "match_type": "orig_only",
                     "buy_match": "missing_in_new",
-                    "buy_date_match": "missing_in_new",
                     "sell_match": "missing_in_new",
                     "direction_match": None,
                     "orig_entryDay": o["entryDay"],
@@ -136,7 +131,6 @@ def compare_results():
                     "symbol": stock,
                     "match_type": "new_only",
                     "buy_match": "missing_in_orig",
-                    "buy_date_match": "missing_in_orig",
                     "sell_match": "missing_in_orig",
                     "direction_match": None,
                     "orig_entryDay": None,
@@ -177,22 +171,10 @@ def compare_results():
     print(f"Original only:           {len(orig_only)}")
     print(f"Optimized only:          {len(new_only)}")
 
-    print(f"\n--- BUY SIGNAL MATCHING (by entry price) ---")
+    print(f"\n--- BUY SIGNAL MATCHING ---")
     buy_counts = matched["buy_match"].value_counts()
     for k, v in buy_counts.items():
         print(f"  {k:<20} {v:>5} ({v / len(matched) * 100:.1f}%)")
-
-    print(f"\n--- BUY DATE MATCHING (algorithm accuracy — ignores data source price diff) ---")
-    buy_date_counts = matched["buy_date_match"].value_counts()
-    for k, v in buy_date_counts.items():
-        print(f"  {k:<20} {v:>5} ({v / len(matched) * 100:.1f}%)")
-
-    # Identify stocks with consistent price data differences
-    price_diff_stocks = matched[matched["buy_match"] == "different"]
-    if len(price_diff_stocks) > 0:
-        stocks_with_price_diff = sorted(price_diff_stocks["symbol"].unique())
-        print(f"\n  Note: {len(price_diff_stocks)} price mismatches across {len(stocks_with_price_diff)} stocks")
-        print(f"  due to different adjusted price data between sources (algorithm dates match).")
 
     print(f"\n--- SELL SIGNAL MATCHING ---")
     sell_counts = matched["sell_match"].value_counts()
@@ -257,7 +239,7 @@ def compare_results():
 
 def generate_summary(orig, new, comparison):
     """Generate results_summary.csv with key statistics."""
-    SUMMARY_FILE = "data/results_summary.csv"
+    SUMMARY_FILE = "data/Comparation 4/results_summary.csv"
 
     orig_closed = orig[~orig["exitDay"].isin(["Open", "Open position"]) & orig["exitDay"].notna()]
     new_closed = new[~new["exitDay"].isin(["Open", "Open position"]) & new["exitDay"].notna()]
@@ -286,12 +268,6 @@ def generate_summary(orig, new, comparison):
     buy_close = (matched["buy_match"] == "close").sum()
     buy_diff = (matched["buy_match"] == "different").sum()
 
-    # Date-based buy accuracy (ignores price data source differences)
-    buy_date_exact = (matched["buy_date_match"] == "exact").sum()
-
-    # Stocks affected by price data differences
-    price_diff_stocks = matched[matched["buy_match"] == "different"]["symbol"].nunique()
-
     sell_exact = (matched["sell_match"] == "exact").sum()
     sell_close_2 = (matched["sell_match"] == "close (±2d)").sum()
     sell_close_5 = (matched["sell_match"] == "close (±5d)").sum()
@@ -318,23 +294,17 @@ def generate_summary(orig, new, comparison):
         ("Original Only Trades", len(orig_only), ""),
         ("Optimized Only Trades", len(new_only), ""),
         ("", "", ""),
-        ("=== Algorithm Accuracy (date-based) ===", "", ""),
-        ("Buy Date - Exact Match", buy_date_exact, f"{buy_date_exact / len(matched) * 100:.1f}%"),
-        ("Sell Date - Exact Match", sell_exact, f"{sell_exact / len(matched) * 100:.1f}%"),
-        ("Direction - Same", dir_same, f"{dir_same / len(matched) * 100:.1f}%"),
-        ("Direction - Different", dir_diff, f"{dir_diff / len(matched) * 100:.1f}%"),
+        ("Buy Match - Exact", buy_exact, f"{buy_exact / len(matched) * 100:.1f}%"),
+        ("Buy Match - Close", buy_close, f"{buy_close / len(matched) * 100:.1f}%"),
+        ("Buy Match - Different", buy_diff, f"{buy_diff / len(matched) * 100:.1f}%"),
         ("", "", ""),
-        ("=== Entry Price Matching (incl. data source diff) ===", "", ""),
-        ("Buy Price - Exact", buy_exact, f"{buy_exact / len(matched) * 100:.1f}%"),
-        ("Buy Price - Close", buy_close, f"{buy_close / len(matched) * 100:.1f}%"),
-        ("Buy Price - Different (data source)", buy_diff, f"{buy_diff / len(matched) * 100:.1f}%"),
-        (f"  Stocks with adj. price diff", price_diff_stocks, f"out of {orig['symbol'].nunique()} total"),
-        ("", "", ""),
-        ("=== Sell Date Matching ===", "", ""),
         ("Sell Match - Exact", sell_exact, f"{sell_exact / len(matched) * 100:.1f}%"),
         ("Sell Match - Close (±2d)", sell_close_2, f"{sell_close_2 / len(matched) * 100:.1f}%"),
         ("Sell Match - Close (±5d)", sell_close_5, f"{sell_close_5 / len(matched) * 100:.1f}%"),
         ("Sell Match - Different", sell_diff, f"{sell_diff / len(matched) * 100:.1f}%"),
+        ("", "", ""),
+        ("Direction - Same", dir_same, f"{dir_same / len(matched) * 100:.1f}%"),
+        ("Direction - Different", dir_diff, f"{dir_diff / len(matched) * 100:.1f}%"),
     ]
 
     summary = pd.DataFrame(rows, columns=["Metric", "Value1", "Value2"])

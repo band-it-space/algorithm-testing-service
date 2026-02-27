@@ -1,14 +1,18 @@
-import os
-import logging
-from datetime import datetime
-from typing import List, Optional, TypedDict, Union, Tuple, Dict, Any
-import requests
 import csv
-import pandas as pd
-import numpy as np
+import json
+import logging
+import os
+from datetime import datetime
+from typing import Any, TypedDict
 
+import numpy as np
+import pandas as pd
+import requests
+
+from app.config.smart_filtering_config import SMART_FILTERING_ENABLED
+from app.models.algorithm_models import AlgorithmParameters, UnifiedTradeSignal
 from app.services.file_service import FileService
-from app.models.algorithm_models import UnifiedTradeSignal, AlgorithmParameters
+from app.services.optimization_service import OptimizationService
 from app.services.queue_service import QueueService
 from app.services.results_aggregation_service import (
     calculate_genome_metrics,
@@ -19,6 +23,7 @@ from app.services.results_aggregation_service import (
     compute_averaged_metrics,
     calculate_averaged_deltas,
 )
+from app.services.smart_filtering_service import SmartFilteringService
 
 # --- CONFIGURATION ---
 FIXED_DEPOSIT_AMOUNT = 10000.0
@@ -29,7 +34,7 @@ AUTOMATED_RESULTS_PER_GENOME_FILE = os.getenv('OUTPUT_PER_GENOME_SHEET_NAME', 'A
 
 class ErrorResponse(TypedDict):
     error: str
-    detail: Optional[str]
+    detail: str | None
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +46,12 @@ END_DATE = os.getenv('OPTIMIZATION_END_DATE', '2016-01-01')
 file_service = FileService()
 
 
-def _load_trade_pairs_from_redis(optimization_id, stock_code, genome_id):
+def _load_trade_pairs_from_redis(
+    optimization_id: str | None,
+    stock_code: str,
+    genome_id: str,
+) -> list[dict[str, Any]]:
     """Load trade pairs stored by algorithm worker and delete the key after read."""
-    import json
     client = QueueService.get_redis_client()
     key = f"trade_pairs:{optimization_id or 'single'}:{stock_code}:{genome_id}"
     raw = client.get(key)
@@ -55,7 +63,7 @@ def _load_trade_pairs_from_redis(optimization_id, stock_code, genome_id):
 
 
 # --- HELPERS ---
-def _to_float_or_zero(value) -> float:
+def _to_float_or_zero(value: Any) -> float:
     try:
         if value in (None, "", "Open position"):
             return 0.0
@@ -63,7 +71,7 @@ def _to_float_or_zero(value) -> float:
     except Exception:
         return 0.0
 
-def _to_float_or_open(value) -> Union[float, str]:
+def _to_float_or_open(value: Any) -> float | str:
     try:
         if value in (None, "", "Open position"):
             return "Open position"
@@ -74,11 +82,11 @@ def _to_float_or_open(value) -> Union[float, str]:
 
 async def save_financial_results(
     stock_code: str, 
-    algo_data: List[Dict[str, Any]], 
+    algo_data: list[dict[str, Any]], 
     file_service: FileService,
     genome_id: str = "G_000",
-    parameters: Optional[Dict[str, Any]] = None
-):
+    parameters: dict[str, Any] | None = None
+) -> None:
     """
     Save financial results including genome information.
     
@@ -147,11 +155,11 @@ async def save_financial_results(
 
 async def save_genome_optimization_results(
     stock_code: str,
-    algo_data: List[Dict[str, Any]],
+    algo_data: list[dict[str, Any]],
     genome_id: str,
-    parameters: Dict[str, Any],
-    optimization_id: Optional[str] = None
-):
+    parameters: dict[str, Any],
+    optimization_id: str | None = None
+) -> Any:
     """
     Calculate and save optimization results for a genome.
     Writes per-stock results to Per Genome CSV and triggers averaging when all stocks done.
@@ -190,7 +198,6 @@ async def save_genome_optimization_results(
     # 3. Store per-stock result in Redis
     if optimization_id:
         try:
-            from app.services.optimization_service import OptimizationService
             OptimizationService.store_genome_result(
                 optimization_id=optimization_id,
                 genome_id=genome_id,
@@ -214,15 +221,11 @@ async def save_genome_optimization_results(
     return result
 
 
-async def _check_genome_completion(optimization_id: str, genome_id: str, parameters: Dict[str, Any]):
+async def _check_genome_completion(optimization_id: str, genome_id: str, parameters: dict[str, Any]) -> None:
     """
     Check if all stock_codes for this genome are done.
     If so, compute averaged metrics and trigger smart filtering.
     """
-    from app.services.optimization_service import OptimizationService
-    from app.config.smart_filtering_config import SMART_FILTERING_ENABLED
-    from app.models.algorithm_models import AlgorithmParameters
-
     metadata = OptimizationService.get_optimization(optimization_id)
     if not metadata:
         return
@@ -280,8 +283,6 @@ async def _check_genome_completion(optimization_id: str, genome_id: str, paramet
     # 7. Smart filtering trigger
     if SMART_FILTERING_ENABLED and genome_id != "G_000":
         try:
-            from app.services.smart_filtering_service import SmartFilteringService
-
             avg_payoff_ratio = float(averaged.get("Payoff Ratio", 0))
             param_values = output_params
 
@@ -301,8 +302,8 @@ async def _check_genome_completion(optimization_id: str, genome_id: str, paramet
             logger.error(f"Smart filtering error for {genome_id}: {e}")
 
 
-async def load_server_data(stock_code:str) -> Union[Tuple[List[UnifiedTradeSignal], List[Optional[datetime]]], ErrorResponse]:
-    """Завантажує дані з API, повертає підготовлений масив сигналів та масив торгових днів"""
+async def load_server_data(stock_code: str) -> tuple[list[UnifiedTradeSignal], list[datetime | None]] | ErrorResponse:
+    """Load data from API, return prepared signal array and trading day array."""
     try:
         API_URL = f'http://ete.stockfisher.com.hk/v1.1/debugHKEX/verifyData?TradeDay=&Code={stock_code}&verifyType=signal'
         headers = {'x-api-key': API_KEY}
@@ -317,7 +318,7 @@ async def load_server_data(stock_code:str) -> Union[Tuple[List[UnifiedTradeSigna
             return {"error": "Empty response", "detail": f"There is not any data in API for stock {stock_code}"}
         
         trade_days = []
-        response_data: List[UnifiedTradeSignal] = []
+        response_data: list[UnifiedTradeSignal] = []
         current_position = None
         
         for day in result_data: 
@@ -416,7 +417,7 @@ async def load_server_data(stock_code:str) -> Union[Tuple[List[UnifiedTradeSigna
         return { "error": "API error", "detail": "API error"}
 
 def convert_csv_to_unified(csv_row: dict) -> UnifiedTradeSignal:
-    """Конвертує CSV рядок до UnifiedTradeSignal"""
+    """Convert a CSV row to UnifiedTradeSignal."""
     try:
         buy_signal_str = csv_row.get('Buy Signal', '')
         stop_signal_str = csv_row.get('Stop Signal', '')
@@ -511,8 +512,8 @@ async def process_result_task(processing_data):
 
         if isinstance(api_result, dict):
             logger.error(f"API error for stock {stock_code}: {api_result}")
-            unified_api_data: List[UnifiedTradeSignal] = []
-            trade_days: List[Optional[datetime]] = []
+            unified_api_data: list[UnifiedTradeSignal] = []
+            trade_days: list[datetime | None] = []
         else:
             unified_api_data, trade_days = api_result
                 
@@ -685,7 +686,6 @@ async def process_result_task(processing_data):
         # Update optimization progress if applicable
         if optimization_id:
             try:
-                from app.services.optimization_service import OptimizationService
                 OptimizationService.increment_completed_tasks(optimization_id)
             except Exception as e:
                 logger.error(f"Failed to update optimization progress: {e}")
@@ -706,7 +706,6 @@ async def process_result_task(processing_data):
         optimization_id = processing_data.get('optimization_id')
         if optimization_id:
             try:
-                from app.services.optimization_service import OptimizationService
                 OptimizationService.increment_failed_tasks(optimization_id)
             except Exception:
                 pass

@@ -1,6 +1,7 @@
 import logging
 import os
-from typing import List, Optional, Dict, Any
+import traceback
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
@@ -22,7 +23,7 @@ class ParameterRangeInput(BaseModel):
     max_val: float = Field(alias="Max")
     step: float = Field(alias="Step")
     change: bool = Field(alias="Change")
-    rule: Optional[str] = Field(default="", alias="Rule")
+    rule: str | None = Field(default="", alias="Rule")
     
     class Config:
         populate_by_name = True
@@ -30,8 +31,8 @@ class ParameterRangeInput(BaseModel):
 
 class OptimizationRequest(BaseModel):
     """Request model for starting an optimization."""
-    stock_codes: List[str] = Field(..., description="List of stock codes to optimize")
-    parameter_ranges: Optional[List[Dict[str, Any]]] = Field(
+    stock_codes: list[str] = Field(..., description="List of stock codes to optimize")
+    parameter_ranges: list[dict[str, Any]] | None = Field(
         default=None,
         description="Parameter ranges. If not provided, reads from Google Sheets"
     )
@@ -39,7 +40,7 @@ class OptimizationRequest(BaseModel):
         default=False,
         description="Read parameter ranges from Google Sheets"
     )
-    sheet_id: Optional[str] = Field(
+    sheet_id: str | None = Field(
         default=None,
         description="Google Sheet ID for parameter ranges"
     )
@@ -50,7 +51,7 @@ class OptimizationResponse(BaseModel):
     optimization_id: str
     total_genomes: int
     total_tasks: int
-    stock_codes: List[str]
+    stock_codes: list[str]
     status: str
     message: str
 
@@ -59,8 +60,8 @@ class SmartFilteringProgress(BaseModel):
     """Smart filtering progress info."""
     enabled: bool = False
     genomes_skipped: int = 0
-    eliminated_params: List[Dict[str, Any]] = Field(default_factory=list)
-    error: Optional[str] = None
+    eliminated_params: list[dict[str, Any]] = Field(default_factory=list)
+    error: str | None = None
 
 
 class OptimizationProgressResponse(BaseModel):
@@ -72,19 +73,19 @@ class OptimizationProgressResponse(BaseModel):
     failed_tasks: int
     progress_percent: float
     total_genomes: int
-    stock_codes: List[str]
+    stock_codes: list[str]
     created_at: str
     updated_at: str
     elapsed_seconds: float = 0.0
-    eta_seconds: Optional[float] = None
-    eta_formatted: Optional[str] = None
-    smart_filtering: Optional[SmartFilteringProgress] = None
+    eta_seconds: float | None = None
+    eta_formatted: str | None = None
+    smart_filtering: SmartFilteringProgress | None = None
 
 
 class GenomeCombinationsResponse(BaseModel):
     """Response model for genome combinations preview."""
     total_combinations: int
-    variable_parameters: List[Dict[str, Any]]
+    variable_parameters: list[dict[str, Any]]
     fixed_parameters_count: int
 
 
@@ -161,7 +162,6 @@ async def run_optimization(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        import traceback
         logger.error(f"Error creating optimization: {e}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -227,7 +227,7 @@ async def cancel_optimization(optimization_id: str):
     return {"message": f"Optimization {optimization_id} cancelled"}
 
 
-@router.get("/optimizations", response_model=List[OptimizationProgressResponse])
+@router.get("/optimizations", response_model=list[OptimizationProgressResponse])
 async def list_optimizations(limit: int = 50):
     """List recent optimizations."""
     optimizations = OptimizationService.list_optimizations(limit=limit)
@@ -236,9 +236,9 @@ async def list_optimizations(limit: int = 50):
 
 @router.post("/preview-genomes", response_model=GenomeCombinationsResponse)
 async def preview_genome_combinations(
-    parameter_ranges: Optional[List[Dict[str, Any]]] = None,
+    parameter_ranges: list[dict[str, Any]] | None = None,
     use_google_sheets: bool = False,
-    sheet_id: Optional[str] = None
+    sheet_id: str | None = None
 ):
     """
     Preview the number of genome combinations that would be generated.

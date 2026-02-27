@@ -1,12 +1,11 @@
-import os
-import aiomysql
 import asyncio
-from dotenv import load_dotenv
 import logging
+import os
+from datetime import date, datetime
 
+import aiomysql
 import requests
-from datetime import datetime, date
-from typing import Any, Dict, List, Optional
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -38,7 +37,7 @@ dbconfig = {
 
 
 
-# Глобальний пул, створюється один раз
+# Global pool, created once
 pool: aiomysql.Pool | None = None
 
 # Global cache service instance
@@ -85,7 +84,7 @@ async def warm_spy_cache(end_date: str | None = None):
 
 
 async def init_db_pool():
-    """Ініціалізує глобальний пул з'єднань."""
+    """Initialize global MySQL connection pool."""
     global pool
     if pool is None:
         pool = await aiomysql.create_pool(
@@ -93,10 +92,10 @@ async def init_db_pool():
             maxsize=20,
             **dbconfig,
         )
-        print("✅ MySQL connection pool initialized")
+        logger.info("MySQL connection pool initialized")
 
 async def get_stock_data_from_db(code: str, end_date: str | None = None, return_ohlcv: bool = False):
-    """Отримати дані про акції з API з підтримкою кешування."""
+    """Get stock data from API with caching support."""
     cache = _get_cache_service()
 
     if cache:
@@ -163,7 +162,7 @@ def _fetch_stock_data_from_api(code: str, end_date: str | None = None):
         response.raise_for_status()
         stock_data_api = response.json()
     except requests.RequestException as e:
-        print(f"❌ Error fetching data from API: {e}")
+        logger.error(f"Error fetching data from API: {e}")
         return []
     
     stock_records = []
@@ -199,7 +198,7 @@ def _fetch_stock_data_from_api(code: str, end_date: str | None = None):
     
     empty_records = [rec for rec in stock_records if rec["open"] == 0]
     if empty_records:
-        print("⚠️ Empty records found at dates:", ", ".join(rec["date"] for rec in empty_records))
+        logger.warning("Empty records found at dates: %s", ", ".join(rec["date"] for rec in empty_records))
     
     stock_records = [rec for rec in stock_records if rec not in empty_records]
         

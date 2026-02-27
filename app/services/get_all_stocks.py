@@ -1,9 +1,9 @@
-import requests
-import pandas as pd
 import io
 import re
 from datetime import datetime
-from typing import List, Dict
+
+import pandas as pd
+import requests
 
 
 def extract_date_from_text(text: str) -> str | None:

@@ -2,10 +2,10 @@
 Reusable concurrent worker that processes multiple RQ jobs via ThreadPoolExecutor.
 Handles both sync and async task functions.
 """
-import logging
-import time
 import asyncio
 import inspect
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 

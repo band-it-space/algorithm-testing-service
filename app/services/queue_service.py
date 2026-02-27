@@ -3,7 +3,8 @@ import uuid
 import json
 import logging
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Any
+
 import redis
 from rq import Queue
 
@@ -13,10 +14,10 @@ logger = logging.getLogger(__name__)
 class QueueService:
     """Service for managing task queues with Redis."""
     
-    _redis_client: Optional[redis.Redis] = None
-    _algorithm_queue: Optional[Queue] = None
-    _result_queue: Optional[Queue] = None
-    _file_write_queue: Optional[Queue] = None
+    _redis_client: redis.Redis | None = None
+    _algorithm_queue: Queue | None = None
+    _result_queue: Queue | None = None
+    _file_write_queue: Queue | None = None
     
     ALGORITHM_QUEUE = "algorithm_calculation"
     RESULT_PROCESSING_QUEUE = "result_processing"
@@ -25,7 +26,6 @@ class QueueService:
     @classmethod
     def get_redis_client(cls) -> redis.Redis:
         if cls._redis_client is None:
-            import os
             redis_host = os.getenv("REDIS_HOST", "localhost")
             redis_port = int(os.getenv("REDIS_PORT", 6379))
             redis_db = int(os.getenv("REDIS_DB", 0))
@@ -61,12 +61,13 @@ class QueueService:
             cls._file_write_queue = Queue(cls.FILE_WRITE_QUEUE, connection=client, default_timeout=timeout)
         return cls._file_write_queue
     
-    @staticmethod
+    @classmethod
     def add_to_algorithm_queue(
+        cls,
         stock_code: str,
         genome_id: str = "G_000",
-        parameters: Optional[Dict[str, Any]] = None,
-        optimization_id: Optional[str] = None
+        parameters: dict[str, Any] | None = None,
+        optimization_id: str | None = None
     ) -> str:
         """Add a task to the algorithm processing queue."""
         from app.workers.algorithm_worker import process_algorithm_task
@@ -80,20 +81,21 @@ class QueueService:
             "created_at": datetime.now().isoformat(),
         }
         
-        queue = QueueService.get_algorithm_queue()
+        queue = cls.get_algorithm_queue()
         job = queue.enqueue(process_algorithm_task, task_data)
         
         logger.info(f"Added task {task_data['task_id']} to algorithm queue: stock={stock_code}, genome={genome_id}")
         
         return job.id
     
-    @staticmethod
+    @classmethod
     def add_to_result_processing_queue(
+        cls,
         stock_code: str,
         genome_id: str = "G_000",
-        parameters: Optional[Dict[str, Any]] = None,
-        optimization_id: Optional[str] = None,
-        results: Optional[Dict[str, Any]] = None
+        parameters: dict[str, Any] | None = None,
+        optimization_id: str | None = None,
+        results: dict[str, Any] | None = None
     ) -> str:
         """Add a task to the result processing queue."""
         from app.workers.result_worker import process_result_task
@@ -109,18 +111,19 @@ class QueueService:
             "created_at": datetime.now().isoformat(),
         }
         
-        queue = QueueService.get_result_queue()
+        queue = cls.get_result_queue()
         job = queue.enqueue(process_result_task, task_data)
         logger.info(f"Added task {task_id} to result processing queue: stock={stock_code}, genome={genome_id}")
         
         return task_id
     
-    @staticmethod
+    @classmethod
     def add_to_file_write_queue(
+        cls,
         stock_code: str,
         genome_id: str = "G_000",
-        data: Optional[Dict[str, Any]] = None,
-        optimization_id: Optional[str] = None
+        data: dict[str, Any] | None = None,
+        optimization_id: str | None = None
     ) -> str:
         """Add a task to the file write queue."""
         from app.workers.file_write_worker import process_file_write_task
@@ -135,16 +138,16 @@ class QueueService:
             "created_at": datetime.now().isoformat(),
         }
         
-        queue = QueueService.get_file_write_queue()
+        queue = cls.get_file_write_queue()
         job = queue.enqueue(process_file_write_task, task_data)
         logger.info(f"Added task {task_id} to file write queue: stock={stock_code}, genome={genome_id}")
         
         return task_id
     
-    @staticmethod
-    def get_from_queue(queue_name: str, timeout: int = 0) -> Optional[Dict[str, Any]]:
+    @classmethod
+    def get_from_queue(cls, queue_name: str, timeout: int = 0) -> dict[str, Any] | None:
         """Get a task from the specified queue."""
-        client = QueueService.get_redis_client()
+        client = cls.get_redis_client()
         
         if timeout > 0:
             result = client.blpop(queue_name, timeout=timeout)
@@ -158,20 +161,21 @@ class QueueService:
         
         return None
     
-    @staticmethod
-    def get_queue_length(queue_name: str) -> int:
+    @classmethod
+    def get_queue_length(cls, queue_name: str) -> int:
         """Get the number of tasks in a queue."""
-        client = QueueService.get_redis_client()
+        client = cls.get_redis_client()
         return client.llen(queue_name)
     
-    @staticmethod
+    @classmethod
     def add_batch_to_algorithm_queue(
-        tasks: List[Dict[str, Any]]
-    ) -> List[str]:
+        cls,
+        tasks: list[dict[str, Any]]
+    ) -> list[str]:
         """Add multiple tasks to the algorithm queue efficiently."""
         from app.workers.algorithm_worker import process_algorithm_task
         
-        queue = QueueService.get_algorithm_queue()
+        queue = cls.get_algorithm_queue()
         job_ids = []
         
         for task in tasks:

@@ -70,12 +70,20 @@ The following parameters from the task document are **not present** in the curre
 - ✅ `s5` - Uses params correctly
 
 **Functions to Verify:**
-- `s6`, `s7`, `s8`, `s9`, `s10`, `s11`, `s12`, `s13`, `s14`, `s15`, `s16`, `s17`
+- ✅ `s6` — Has params
+- ✅ `s7` — Has params
+- ✅ `s8` — Has params
+- ✅ `s9` — Has params
+- ✅ `s10` — Has params
+- ✅ `s11` — Has params
+- ✅ `s12` — Has params
+- ✅ `s13` — Has params
+- ✅ `s14` — Has params
+- ✅ `s15` — Has params
+- ✅ `s16` — Has params
+- ✅ `s17` — Has params
 
-**Recommended Action:** Verify each sell function:
-1. Has `params: AlgorithmParameters = None` argument
-2. Creates default `params = AlgorithmParameters()` if None
-3. Uses `params.input_SX_*` instead of hardcoded values
+**Status:** ✅ All sell functions now accept `params: AlgorithmParameters = None`.
 
 ---
 
@@ -85,54 +93,13 @@ The following parameters from the task document are **not present** in the curre
 
 **Location:** [docker-compose.yml](../docker-compose.yml)
 
-**Problem:** The `algorithm-service` has `GOOGLE_SHEETS_CREDENTIALS_PATH` and `credentials` volume mount, but workers (`result-worker`, `file-write-worker`) may need these for writing results.
-
-**Fix Required:**
-Add to `result-worker` and `file-write-worker`:
-```yaml
-environment:
-  - GOOGLE_SHEETS_CREDENTIALS_PATH=/app/credentials/google_sheets.json
-  - OUTPUT_SHEET_ID=${OUTPUT_SHEET_ID:-}
-volumes:
-  - ./credentials:/app/credentials:ro
-```
+**Status:** ✅ RESOLVED — All workers now have `GOOGLE_SHEETS_CREDENTIALS_PATH`, `OUTPUT_SHEET_ID`, and `credentials` volume mount.
 
 ---
 
-## 5. Missing `.env.example` File
+## 5. ~~Missing `.env.example` File~~
 
-**Problem:** The project relies on environment variables but lacks a `.env.example` template.
-
-**Required Variables:**
-```env
-# Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_PASSWORD=
-
-# API
-API_PORT=8000
-ENVIRONMENT=development
-DEBUG=true
-LOG_LEVEL=INFO
-
-# Database
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=
-DB_PASSWORD=
-DB_NAME=
-
-# Google Sheets
-GOOGLE_SHEETS_CREDENTIALS_PATH=./credentials/google_sheets.json
-INPUT_SHEET_ID=
-OUTPUT_SHEET_ID=
-
-# Dashboard
-DASHBOARD_PORT=9181
-```
-
-**Action:** Create `.env.example` file with all required variables.
+**Status:** ✅ RESOLVED — `.env.example` has been created with all required variables including Redis, API, Google Sheets, worker configuration, optimization date range, smart filtering, and debug settings.
 
 ---
 
@@ -199,14 +166,14 @@ app.include_router(optimization_router)
 
 ## 9. Summary of Required Actions
 
-| Priority | Issue | Action |
+| Priority | Issue | Status |
 |----------|-------|--------|
-| HIGH | 1.1 Parameter naming | Rename `input_B13_XX` to `input_B13_rel_days` |
-| HIGH | 4.1 Docker env | Add credentials to workers |
-| MEDIUM | 5 | Create `.env.example` file |
-| MEDIUM | 8.1 | Update/run existing tests |
-| LOW | 1.2 Value format | Document S1_hard_stop format |
-| LOW | 3.1 | Verify all sell functions use params |
+| HIGH | 1.1 Parameter naming (`input_B13_XX` → `input_B13_rel_days`) | ⚠️ Open |
+| ~~HIGH~~ | ~~4.1 Docker env for workers~~ | ✅ Resolved |
+| ~~MEDIUM~~ | ~~5 Create `.env.example`~~ | ✅ Resolved |
+| MEDIUM | 8.1 Update/run existing tests | ⚠️ Open |
+| LOW | 1.2 Document S1_hard_stop format | ⚠️ Open |
+| ~~LOW~~ | ~~3.1 Verify all sell functions use params~~ | ✅ Resolved |
 
 ---
 

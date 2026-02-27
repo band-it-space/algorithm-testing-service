@@ -135,6 +135,7 @@ dmypy.json
 # IDE files
 .vscode/
 .idea/
+.vs/
 *.swp
 *.swo
 *~
@@ -192,5 +193,23 @@ temp/
 # FastAPI specific
 .pytest_cache/
 
+# =================================
+# Project-specific
+# =================================
+
+# Runtime data (generated outputs, screener inputs, accuracy proofs)
 data/
+
+# Database data
+data_base/
+
+# Legacy signal file
 hk_signal_dtl.csv
+
+# Internal docs (task plans, presentation materials)
+docs/tasks/
+docs/presentation/
+
+# Manual testing scripts
+tests/
+scripts/

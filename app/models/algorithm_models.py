@@ -1,8 +1,8 @@
-from pydantic import BaseModel
-from typing import Any, Dict, Optional, Union
-from datetime import datetime
 from dataclasses import dataclass, asdict, field
-from typing import List, Optional, Dict, Any, Union
+from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel
 
 
 @dataclass
@@ -110,7 +110,7 @@ class AlgorithmParameters:
     
     # S14 parameters
     input_S14_min_days: int = 300
-    input_S14_horizons: List[int] = field(default_factory=lambda: [35, 70, 105])
+    input_S14_horizons: list[int] = field(default_factory=lambda: [35, 70, 105])
     
     # S15 parameters
     input_S15_crash_drop: float = 0.25
@@ -128,7 +128,7 @@ class AlgorithmParameters:
     input_S17_wide_range: float = 1.6
     input_S17_near_bottom: float = 1.3
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize parameters to dictionary."""
         result = asdict(self)
         if 'input_S14_horizons' in result:
@@ -136,7 +136,7 @@ class AlgorithmParameters:
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "AlgorithmParameters":
+    def from_dict(cls, data: dict[str, Any]) -> "AlgorithmParameters":
         """Deserialize parameters from dictionary."""
         if not data:
             return cls()
@@ -144,7 +144,7 @@ class AlgorithmParameters:
         filtered_data = {k: v for k, v in data.items() if k in known_fields}
         return cls(**filtered_data)
     
-    def get_variable_params_for_output(self, variable_param_names: Optional[List[str]] = None) -> Dict[str, Any]:
+    def get_variable_params_for_output(self, variable_param_names: list[str] | None = None) -> dict[str, Any]:
         """Get subset of parameters typically varied in optimization."""
         if variable_param_names:
             params_dict = self.to_dict()
@@ -172,7 +172,7 @@ class ParameterRange:
     change: bool
     rule: str = ""
     
-    def generate_values(self) -> List[float]:
+    def generate_values(self) -> list[float]:
         """Generate list of values from min to max by step."""
         if not self.change:
             return [self.base]
@@ -185,7 +185,7 @@ class ParameterRange:
         return values
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ParameterRange":
+    def from_dict(cls, data: dict[str, Any]) -> "ParameterRange":
         """Create ParameterRange from dictionary (e.g., from CSV row)."""
         return cls(
             name=data.get("Parameter Variable", data.get("name", "")),
@@ -201,13 +201,13 @@ class ParameterRange:
 @dataclass
 class UnifiedTradeSignal:
     """Unified representation of a trade signal."""
-    buy_signal: Optional[datetime]
-    stop_signal: Union[datetime, str]
+    buy_signal: datetime | None
+    stop_signal: datetime | str
     entry_price: float
-    exit_price: Union[float, str]
-    day_before_buy: Optional[datetime]
-    day_before_sell: Optional[datetime]
-    gain_lose: Optional[float]
+    exit_price: float | str
+    day_before_buy: datetime | None
+    day_before_sell: datetime | None
+    gain_lose: float | None
     source: str
 
 
@@ -227,13 +227,13 @@ class GenomeResult:
     win_rate: float
     total_profit: float
     profit_percent: float
-    parameters: Dict[str, Any]
+    parameters: dict[str, Any]
     
     # Delta vs BASE (calculated separately)
-    profit_delta: Optional[float] = None
-    win_rate_delta: Optional[float] = None
+    profit_delta: float | None = None
+    win_rate_delta: float | None = None
     
-    def to_output_row(self) -> Dict[str, Any]:
+    def to_output_row(self) -> dict[str, Any]:
         """Convert to output format matching Output Results Sample.csv"""
         row = {
             "Genome ID": self.genome_id,

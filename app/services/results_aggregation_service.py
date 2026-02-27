@@ -1,6 +1,7 @@
 import logging
-from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
+from typing import Any
+
 import pandas as pd
 
 from app.models.algorithm_models import GenomeResult, AlgorithmParameters
@@ -11,10 +12,10 @@ FIXED_DEPOSIT_AMOUNT = 10000.0
 
 
 def calculate_genome_metrics(
-    trades: List[Dict[str, Any]],
+    trades: list[dict[str, Any]],
     genome_id: str,
     stock_code: str,
-    parameters: Dict[str, Any]
+    parameters: dict[str, Any]
 ) -> GenomeResult:
     """
     Calculate financial metrics for a genome's trades.
@@ -135,9 +136,9 @@ def calculate_win_rate(trades_win: int, trade_count: int) -> float:
 
 
 def calculate_deltas_vs_base(
-    results: List[GenomeResult],
+    results: list[GenomeResult],
     base_genome_id: str = "G_000"
-) -> List[GenomeResult]:
+) -> list[GenomeResult]:
     """
     Calculate profit and win rate deltas relative to BASE genome.
     
@@ -149,7 +150,7 @@ def calculate_deltas_vs_base(
         Updated list with delta values calculated
     """
     # Find BASE result for each stock
-    base_by_stock: Dict[str, GenomeResult] = {}
+    base_by_stock: dict[str, GenomeResult] = {}
     for result in results:
         if result.genome_id == base_genome_id:
             base_by_stock[result.stock_code] = result
@@ -176,9 +177,9 @@ def calculate_deltas_vs_base(
 
 
 def aggregate_optimization_results(
-    all_trades: Dict[str, List[Dict[str, Any]]],
-    genome_parameters: Dict[str, Dict[str, Any]]
-) -> List[GenomeResult]:
+    all_trades: dict[str, list[dict[str, Any]]],
+    genome_parameters: dict[str, dict[str, Any]]
+) -> list[GenomeResult]:
     """
     Aggregate trades by genome and calculate metrics.
     
@@ -209,7 +210,7 @@ def aggregate_optimization_results(
     return results
 
 
-def format_results_for_output(results: List[GenomeResult]) -> List[Dict[str, Any]]:
+def format_results_for_output(results: list[GenomeResult]) -> list[dict[str, Any]]:
     """
     Format results for CSV/Google Sheets output.
     
@@ -226,7 +227,7 @@ def format_results_for_output(results: List[GenomeResult]) -> List[Dict[str, Any
     return output
 
 
-def get_output_fieldnames() -> List[str]:
+def get_output_fieldnames() -> list[str]:
     """Get ordered list of field names for output CSV."""
     base_fields = [
         "Genome ID",
@@ -256,7 +257,7 @@ def get_output_fieldnames() -> List[str]:
     return base_fields + param_fields
 
 
-def get_per_genome_output_fieldnames() -> List[str]:
+def get_per_genome_output_fieldnames() -> list[str]:
     """Fieldnames for 'Automated Results Per Genome.csv' — per-stock, no param columns."""
     return [
         "Genome ID",
@@ -274,7 +275,7 @@ def get_per_genome_output_fieldnames() -> List[str]:
     ]
 
 
-def get_averaged_output_fieldnames(variable_param_names: Optional[List[str]] = None) -> List[str]:
+def get_averaged_output_fieldnames(variable_param_names: list[str] | None = None) -> list[str]:
     """Fieldnames for 'Automated Results.csv' — averaged across stocks, with param columns."""
     base_fields = [
         "Genome ID",
@@ -303,10 +304,10 @@ def get_averaged_output_fieldnames(variable_param_names: Optional[List[str]] = N
 
 
 def compute_averaged_metrics(
-    per_stock_results: List[Dict[str, Any]],
+    per_stock_results: list[dict[str, Any]],
     genome_id: str,
-    parameters: Dict[str, Any],
-) -> Dict[str, Any]:
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
     """
     Average per-stock result dicts into one averaged result dict.
     
@@ -347,7 +348,7 @@ def compute_averaged_metrics(
     return row
 
 
-def calculate_averaged_deltas(result: Dict[str, Any], base: Dict[str, Any]) -> Dict[str, Any]:
+def calculate_averaged_deltas(result: dict[str, Any], base: dict[str, Any]) -> dict[str, Any]:
     """Calculate Profit Delta and Win Rate Delta vs averaged BASE."""
     base_profit = float(base.get("Total Win ($)", 0)) - float(base.get("Total Loss ($)", 0))
     genome_profit = float(result.get("Total Win ($)", 0)) - float(result.get("Total Loss ($)", 0))

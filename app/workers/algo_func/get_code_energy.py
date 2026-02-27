@@ -1,7 +1,8 @@
-from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
-from typing import Dict, Any, List
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any
+
+from dateutil.relativedelta import relativedelta
 
 @dataclass
 class StockRecord:
@@ -13,7 +14,7 @@ class StockRecord:
     close: float
     volume: int
 
-def process_stock_data(stock_data: List[StockRecord], load_data_date: datetime) -> Dict[str, Any]:
+def process_stock_data(stock_data: list[StockRecord], load_data_date: datetime) -> dict[str, Any]:
     """Process stock data and return arrays for calculation"""
     ldate = []
     lsdate = []
@@ -57,7 +58,7 @@ def process_stock_data(stock_data: List[StockRecord], load_data_date: datetime) 
         'volume': lvolume
     }
 
-def calculate_rsi(prices: List[float], current_idx: int, period: int) -> List[float]:
+def calculate_rsi(prices: list[float], current_idx: int, period: int) -> list[float]:
     """Calculate RSI values"""
     if current_idx < period:
         return [float('nan')] * (current_idx + 1)
@@ -109,7 +110,7 @@ def calculate_rsi(prices: List[float], current_idx: int, period: int) -> List[fl
     
     return rsi_values
 
-def calculate_energy_indicators_last_16_days(trade_day: str, stock_data: List[StockRecord], stock_data_2800: List[StockRecord]) -> Dict[str, Any]:
+def calculate_energy_indicators_last_16_days(trade_day: str, stock_data: list[StockRecord], stock_data_2800: list[StockRecord]) -> dict[str, Any]:
     """
     Calculate E1-E5 energy indicators for the last 16 trading days including the current day
     
@@ -344,7 +345,7 @@ def calculate_energy_indicators_last_16_days(trade_day: str, stock_data: List[St
             "indicators": []
         }
 
-def calculate_energy_indicators_single_day(stockname: str, trade_day: str, stock_data: List[StockRecord], stock_data_2800: List[StockRecord]) -> Dict[str, Any]:
+def calculate_energy_indicators_single_day(stockname: str, trade_day: str, stock_data: list[StockRecord], stock_data_2800: list[StockRecord]) -> dict[str, Any]:
     """
     Calculate E1-E5 energy indicators for a single day (original function)
     

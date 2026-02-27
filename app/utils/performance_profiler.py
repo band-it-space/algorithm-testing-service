@@ -5,14 +5,15 @@ Provides decorators and context managers for measuring execution time
 and collecting performance metrics.
 """
 
-import time
+import asyncio
 import functools
 import logging
-from typing import Dict, Optional, Callable, Any
-from dataclasses import dataclass, field
-from contextlib import contextmanager
-from collections import defaultdict
 import threading
+import time
+from collections import defaultdict
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ class TimingMetrics:
         self.min_time = min(self.min_time, duration)
         self.max_time = max(self.max_time, duration)
     
-    def to_dict(self) -> Dict[str, float]:
+    def to_dict(self) -> dict[str, float]:
         return {
             "count": self.count,
             "total_time": self.total_time,
@@ -62,7 +63,7 @@ class CacheMetrics:
     def record_miss(self) -> None:
         self.misses += 1
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "hits": self.hits,
             "misses": self.misses,
@@ -78,7 +79,7 @@ class PerformanceProfiler:
     across the application.
     """
     
-    _instance: Optional['PerformanceProfiler'] = None
+    _instance: 'PerformanceProfiler | None' = None
     _lock = threading.Lock()
     
     def __new__(cls) -> 'PerformanceProfiler':
@@ -92,8 +93,8 @@ class PerformanceProfiler:
     def __init__(self):
         if self._initialized:
             return
-        self._timing_metrics: Dict[str, TimingMetrics] = defaultdict(TimingMetrics)
-        self._cache_metrics: Dict[str, CacheMetrics] = defaultdict(CacheMetrics)
+        self._timing_metrics: dict[str, TimingMetrics] = defaultdict(TimingMetrics)
+        self._cache_metrics: dict[str, CacheMetrics] = defaultdict(CacheMetrics)
         self._metrics_lock = threading.Lock()
         self._initialized = True
     
@@ -113,21 +114,21 @@ class PerformanceProfiler:
         with self._metrics_lock:
             self._cache_metrics[cache_name].record_miss()
     
-    def get_timing_metrics(self, name: Optional[str] = None) -> Dict[str, Any]:
+    def get_timing_metrics(self, name: str | None = None) -> dict[str, Any]:
         """Get timing metrics for a specific operation or all operations."""
         with self._metrics_lock:
             if name:
                 return self._timing_metrics[name].to_dict()
             return {k: v.to_dict() for k, v in self._timing_metrics.items()}
     
-    def get_cache_metrics(self, cache_name: Optional[str] = None) -> Dict[str, Any]:
+    def get_cache_metrics(self, cache_name: str | None = None) -> dict[str, Any]:
         """Get cache metrics for a specific cache or all caches."""
         with self._metrics_lock:
             if cache_name:
                 return self._cache_metrics[cache_name].to_dict()
             return {k: v.to_dict() for k, v in self._cache_metrics.items()}
     
-    def get_all_metrics(self) -> Dict[str, Any]:
+    def get_all_metrics(self) -> dict[str, Any]:
         """Get all collected metrics."""
         return {
             "timing": self.get_timing_metrics(),
@@ -175,7 +176,7 @@ class PerformanceProfiler:
 profiler = PerformanceProfiler()
 
 
-def timed(name: Optional[str] = None, log_args: bool = False):
+def timed(name: str | None = None, log_args: bool = False):
     """
     Decorator for measuring function execution time.
     
@@ -225,7 +226,6 @@ def timed(name: Optional[str] = None, log_args: bool = False):
 
 def asyncio_iscoroutinefunction(func: Callable) -> bool:
     """Check if function is an async coroutine."""
-    import asyncio
     return asyncio.iscoroutinefunction(func)
 
 
@@ -280,7 +280,7 @@ class CacheCounter:
         """Record a cache miss."""
         profiler.record_cache_miss(self.cache_name)
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get current cache statistics."""
         return profiler.get_cache_metrics(self.cache_name)
 

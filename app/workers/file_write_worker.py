@@ -1,9 +1,10 @@
 import csv
-import os
 import logging
-from typing import Dict, Any, List, Optional
+import os
+from typing import Any
 
 from app.services.file_service import FileService
+from app.services.results_aggregation_service import get_output_fieldnames
 
 logger = logging.getLogger(__name__)
 file_service = FileService()
@@ -13,7 +14,7 @@ AUTOMATED_RESULTS_FILE = os.getenv('OUTPUT_SHEET_NAME', 'Automated Results')
 COMPARISON_RESULTS_FILE = "comparison_results"
 
 
-async def process_file_write_task(task_data: Dict[str, Any]):
+async def process_file_write_task(task_data: dict[str, Any]) -> dict[str, Any]:
     """
     Process file write task from queue.
     Supports genome-based results and optimization data.
@@ -59,24 +60,21 @@ async def process_file_write_task(task_data: Dict[str, Any]):
 
 async def write_optimization_summary(
     optimization_id: str,
-    results: List[Dict[str, Any]],
-    output_file: Optional[str] = None
-):
+    results: list[dict[str, Any]],
+    output_file: str | None = None
+) -> bool:
     """
     Write final optimization summary to CSV.
     Uses format matching Output Results Sample.csv.
     """
     try:
-        from app.services.results_aggregation_service import get_output_fieldnames
-        
         if not results:
             logger.warning(f"No results to write for optimization {optimization_id}")
             return False
         
         # Always write to single "Automated Results.csv" file
         output_file = AUTOMATED_RESULTS_FILE
-        fieldnames = get_output_fieldnames()
-        
+        fieldnames = get_output_fieldnames()        
         success = await file_service.add_data_to_csv(output_file, results, fieldnames)
         
         if success:

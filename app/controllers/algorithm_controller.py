@@ -1,21 +1,18 @@
-from app.services.get_all_stoccks import get_stocks_codes
 from fastapi import APIRouter, HTTPException
-from app.services.queue_service import QueueService
+
 from app.services.file_service import FileService
+from app.services.queue_service import QueueService
+
 algorithm_router = APIRouter()
+
 
 @algorithm_router.get("/")
 async def init_algo_testing():
-    """
-    Запускає тестування алгоритму, додаючи завдання до першої черги
-    """
+    """Start algorithm testing by enqueuing tasks for screener stocks."""
     try:
-        #Робимо запит за всими стоками 
-        #stocks  = await get_stocks_codes()
-
         file_service = FileService()
         stocks = await file_service.read_data_from_csv("screener")
-        
+
         if len(stocks) == 0:
             return {
                 "message": "No stocks found",
@@ -24,7 +21,7 @@ async def init_algo_testing():
         exist = await file_service.read_data_from_csv("results")
 
         existing_codes = {str(item.get("stock_code")) for item in exist}
-        
+
         done = []
         added = []
         for stock in stocks:
@@ -43,11 +40,11 @@ async def init_algo_testing():
                 }
 
         return {
-            "message": f'Done: {len(done)}, Added to queue: {len(added)}',
+            "message": f"Done: {len(done)}, Added to queue: {len(added)}",
             "done": done,
-            'added': added,
+            "added": added,
             "status": "queued",
         }
-    
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start algorithm testing: {str(e)}")

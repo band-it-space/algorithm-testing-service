@@ -6,9 +6,10 @@ Redis-based caching layer for stock OHLCV data to eliminate redundant API calls.
 
 import json
 import logging
-from typing import Optional, List, Dict, Any
-from dataclasses import dataclass, asdict
 import pickle
+from dataclasses import dataclass, asdict
+from typing import Any
+
 from redis import Redis
 
 from app.utils.performance_profiler import CacheCounter, timed
@@ -29,7 +30,7 @@ class OHLCV:
     # Pre-parsed date cache (set during pre-processing)
     _parsed_date: Any = None
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "date": self.date,
             "open": self.open,
@@ -40,7 +41,7 @@ class OHLCV:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'OHLCV':
+    def from_dict(cls, data: dict[str, Any]) -> 'OHLCV':
         return cls(
             date=data["date"],
             open=data["open"],
@@ -84,12 +85,12 @@ class DataCacheService:
         """Generate a cache key for stock data."""
         return f"{self.key_prefix}:{code}:{date_range}"
     
-    def _serialize(self, data: List[OHLCV]) -> bytes:
+    def _serialize(self, data: list[OHLCV]) -> bytes:
         """Serialize OHLCV list to bytes."""
         dict_list = [bar.to_dict() for bar in data]
         return pickle.dumps(dict_list)
     
-    def _deserialize(self, data: bytes) -> List[OHLCV]:
+    def _deserialize(self, data: bytes) -> list[OHLCV]:
         """Deserialize bytes to OHLCV list."""
         dict_list = pickle.loads(data)
         return [OHLCV.from_dict(d) for d in dict_list]
@@ -98,9 +99,9 @@ class DataCacheService:
     def get_stock_data(
         self, 
         code: str, 
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None
-    ) -> Optional[List[OHLCV]]:
+        start_date: str | None = None,
+        end_date: str | None = None
+    ) -> list[OHLCV] | None:
         """
         Get cached stock data for a given code.
         
@@ -140,10 +141,10 @@ class DataCacheService:
     
     def _filter_by_date(
         self, 
-        data: List[OHLCV], 
-        start_date: Optional[str], 
-        end_date: Optional[str]
-    ) -> List[OHLCV]:
+        data: list[OHLCV], 
+        start_date: str | None, 
+        end_date: str | None
+    ) -> list[OHLCV]:
         """Filter OHLCV data by date range."""
         result = data
         if start_date:
@@ -156,8 +157,8 @@ class DataCacheService:
     def set_stock_data(
         self, 
         code: str, 
-        data: List[OHLCV],
-        ttl: Optional[int] = None
+        data: list[OHLCV],
+        ttl: int | None = None
     ) -> bool:
         """
         Cache stock data for a given code.
@@ -184,9 +185,9 @@ class DataCacheService:
     
     def get_spy_data(
         self, 
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None
-    ) -> Optional[List[OHLCV]]:
+        start_date: str | None = None,
+        end_date: str | None = None
+    ) -> list[OHLCV] | None:
         """
         Get cached SPY (2800) reference data.
         
@@ -199,7 +200,7 @@ class DataCacheService:
         """
         return self.get_stock_data(self.SPY_CODE, start_date, end_date)
     
-    def set_spy_data(self, data: List[OHLCV], ttl: Optional[int] = None) -> bool:
+    def set_spy_data(self, data: list[OHLCV], ttl: int | None = None) -> bool:
         """Cache SPY reference data with extended TTL."""
         # SPY data gets longer TTL since it's frequently accessed
         spy_ttl = ttl or (self.default_ttl * 4)  # 4 hours default
@@ -277,7 +278,7 @@ class DataCacheService:
             logger.error(f"Cache invalidation error: {e}")
             return 0
     
-    def get_cache_stats(self) -> Dict[str, Any]:
+    def get_cache_stats(self) -> dict[str, Any]:
         """
         Get cache statistics.
         
@@ -312,7 +313,7 @@ class DataCacheService:
         return stats
 
 
-def create_cache_service_from_config() -> Optional[DataCacheService]:
+def create_cache_service_from_config() -> DataCacheService | None:
     """
     Factory function to create DataCacheService from application config.
     
@@ -320,8 +321,8 @@ def create_cache_service_from_config() -> Optional[DataCacheService]:
         DataCacheService instance or None if Redis unavailable
     """
     try:
-        from app.config.queue_config import get_redis_connection
-        redis_conn = get_redis_connection()
+        from app.services.queue_service import QueueService
+        redis_conn = QueueService.get_redis_client()
         return DataCacheService(redis_conn)
     except ImportError:
         logger.warning("Could not import queue_config, cache service unavailable")

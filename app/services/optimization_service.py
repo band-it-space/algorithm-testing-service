@@ -1,17 +1,21 @@
-import uuid
+import csv
 import json
 import logging
 import os
-from datetime import datetime
-from typing import Optional, Dict, Any, List
+import uuid
 from dataclasses import dataclass, asdict
+from datetime import datetime
 from enum import Enum
+from typing import Any
 
 import redis
 
+from app.config.smart_filtering_config import SMART_FILTERING_ENABLED
 from app.models.algorithm_models import AlgorithmParameters, ParameterRange
 from app.services.genome_service import generate_genomes, parse_parameter_ranges, calculate_total_combinations
 from app.services.queue_service import QueueService
+from app.services.results_aggregation_service import get_averaged_output_fieldnames
+from app.services.smart_filtering_service import SmartFilteringService
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +37,7 @@ class OptimizationStatus(str, Enum):
 @dataclass
 class OptimizationMetadata:
     optimization_id: str
-    stock_codes: List[str]
+    stock_codes: list[str]
     total_genomes: int
     total_tasks: int
     completed_tasks: int
@@ -41,15 +45,15 @@ class OptimizationMetadata:
     status: str
     created_at: str
     updated_at: str
-    parameter_ranges: List[Dict[str, Any]]
-    sheet_id: Optional[str] = None  # Google Sheet ID for output
-    variable_param_names: Optional[List[str]] = None
+    parameter_ranges: list[dict[str, Any]]
+    sheet_id: str | None = None  # Google Sheet ID for output
+    variable_param_names: list[str] | None = None
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "OptimizationMetadata":
+    def from_dict(cls, data: dict[str, Any]) -> "OptimizationMetadata":
         # Handle missing optional fields for backwards compatibility
         if 'sheet_id' not in data:
             data['sheet_id'] = None
@@ -65,8 +69,8 @@ class OptimizationService:
     OPTIMIZATION_LIST_KEY = "optimization_list"
     OPTIMIZATION_RESULTS_PREFIX = "optimization_results:"
     
-    @staticmethod
-    def get_redis_client() -> redis.Redis:
+    @classmethod
+    def get_redis_client(cls) -> redis.Redis:
         return QueueService.get_redis_client()
     
     @classmethod
@@ -84,9 +88,9 @@ class OptimizationService:
     @classmethod
     def create_optimization(
         cls,
-        stock_codes: List[str],
-        parameter_ranges: List[Dict[str, Any]],
-        sheet_id: Optional[str] = None,
+        stock_codes: list[str],
+        parameter_ranges: list[dict[str, Any]],
+        sheet_id: str | None = None,
     ) -> OptimizationMetadata:
         """Create a new optimization run and queue all tasks."""
         optimization_id = f"opt_{uuid.uuid4().hex[:12]}"
@@ -132,9 +136,7 @@ class OptimizationService:
         client.rpush(cls.OPTIMIZATION_LIST_KEY, optimization_id)
         
         # Store genome-param mapping for smart filtering
-        from app.config.smart_filtering_config import SMART_FILTERING_ENABLED
         if SMART_FILTERING_ENABLED:
-            from app.services.smart_filtering_service import SmartFilteringService
             SmartFilteringService.store_genome_params(optimization_id, genomes, variable_param_names)
         
         logger.info(f"Created optimization {optimization_id}: {total_genomes} genomes × {len(stock_codes)} stocks = {total_tasks} tasks")
@@ -179,7 +181,7 @@ class OptimizationService:
         return len(tasks)
     
     @classmethod
-    def get_optimization(cls, optimization_id: str) -> Optional[OptimizationMetadata]:
+    def get_optimization(cls, optimization_id: str) -> OptimizationMetadata | None:
         """Get optimization metadata by ID."""
         client = cls.get_redis_client()
         data = client.get(f"{cls.OPTIMIZATION_PREFIX}{optimization_id}")
@@ -241,7 +243,7 @@ class OptimizationService:
         cls,
         optimization_id: str,
         count: int = 1
-    ) -> Optional[OptimizationMetadata]:
+    ) -> OptimizationMetadata | None:
         """Atomically increment the completed task count using a Lua script."""
         client = cls.get_redis_client()
         key = f"{cls.OPTIMIZATION_PREFIX}{optimization_id}"
@@ -286,7 +288,7 @@ class OptimizationService:
         cls,
         optimization_id: str,
         count: int = 1
-    ) -> Optional[OptimizationMetadata]:
+    ) -> OptimizationMetadata | None:
         """Atomically increment the failed task count using a Lua script."""
         client = cls.get_redis_client()
         key = f"{cls.OPTIMIZATION_PREFIX}{optimization_id}"
@@ -307,7 +309,7 @@ class OptimizationService:
         optimization_id: str,
         genome_id: str,
         stock_code: str,
-        result: Dict[str, Any]
+        result: dict[str, Any]
     ) -> bool:
         """Store a single genome result."""
         client = cls.get_redis_client()
@@ -321,14 +323,14 @@ class OptimizationService:
     GENOME_DONE_PREFIX = "genome_done:"
 
     @classmethod
-    def store_averaged_result(cls, optimization_id: str, genome_id: str, result: Dict[str, Any]) -> None:
+    def store_averaged_result(cls, optimization_id: str, genome_id: str, result: dict[str, Any]) -> None:
         """Store averaged result for a genome."""
         client = cls.get_redis_client()
         key = f"{cls.OPTIMIZATION_AVG_RESULTS_PREFIX}{optimization_id}"
         client.hset(key, genome_id, json.dumps(result))
 
     @classmethod
-    def get_averaged_results(cls, optimization_id: str) -> Dict[str, Dict[str, Any]]:
+    def get_averaged_results(cls, optimization_id: str) -> dict[str, dict[str, Any]]:
         """Get all averaged results for an optimization."""
         client = cls.get_redis_client()
         key = f"{cls.OPTIMIZATION_AVG_RESULTS_PREFIX}{optimization_id}"
@@ -347,7 +349,7 @@ class OptimizationService:
         return client.hincrby(key, genome_id, 1)
     
     @classmethod
-    def get_optimization_results(cls, optimization_id: str) -> Dict[str, Dict[str, Any]]:
+    def get_optimization_results(cls, optimization_id: str) -> dict[str, dict[str, Any]]:
         """Get all results for an optimization with recalculated deltas."""
         client = cls.get_redis_client()
         key = f"{cls.OPTIMIZATION_RESULTS_PREFIX}{optimization_id}"
@@ -364,13 +366,13 @@ class OptimizationService:
         return results
     
     @classmethod
-    def _recalculate_deltas(cls, results: Dict[str, Dict]) -> Dict[str, Dict]:
+    def _recalculate_deltas(cls, results: dict[str, dict]) -> dict[str, dict]:
         """Recalculate Profit Delta and Win Rate Delta relative to G_000 (BASE)."""
         if not results:
             return results
         
         # Group by stock_code
-        by_stock: Dict[str, Dict[str, Dict]] = {}
+        by_stock: dict[str, dict[str, dict]] = {}
         for key, result in results.items():
             stock_code = result.get("Stock Code")
             if stock_code not in by_stock:
@@ -431,7 +433,7 @@ class OptimizationService:
         return results
     
     @classmethod
-    def get_progress(cls, optimization_id: str) -> Optional[Dict[str, Any]]:
+    def get_progress(cls, optimization_id: str) -> dict[str, Any] | None:
         """Get optimization progress with ETA calculation."""
         metadata = cls.get_optimization(optimization_id)
         if not metadata:
@@ -448,7 +450,6 @@ class OptimizationService:
         eta_seconds = None
         eta_formatted = None
         try:
-            from datetime import datetime
             created_dt = datetime.fromisoformat(metadata.created_at)
             now = datetime.now()
             elapsed_seconds = round((now - created_dt).total_seconds(), 1)
@@ -490,17 +491,14 @@ class OptimizationService:
     def _write_toxic_params_file(cls, optimization_id: str) -> None:
         """Write eliminated toxic parameters to a CSV file in /data."""
         try:
-            from app.config.smart_filtering_config import SMART_FILTERING_ENABLED
             if not SMART_FILTERING_ENABLED:
                 return
-            from app.services.smart_filtering_service import SmartFilteringService
             summary = SmartFilteringService.get_filtering_summary(optimization_id)
             eliminated = summary.get("eliminated_params", [])
             if not eliminated:
                 logger.info(f"No toxic params to write for optimization {optimization_id}")
                 return
 
-            import csv
             file_path = os.path.join("data", f"toxic_parameters_{optimization_id}.csv")
             fieldnames = ["param", "value", "method", "observations", "after_genome"]
             with open(file_path, "w", newline="", encoding="utf-8") as f:
@@ -518,20 +516,18 @@ class OptimizationService:
         except Exception as e:
             logger.error(f"Failed to write toxic params file: {e}")
 
-    @staticmethod
-    def _get_smart_filtering_progress(optimization_id: str) -> Dict[str, Any]:
+    @classmethod
+    def _get_smart_filtering_progress(cls, optimization_id: str) -> dict[str, Any]:
         """Get smart filtering stats for progress API."""
-        from app.config.smart_filtering_config import SMART_FILTERING_ENABLED
         if not SMART_FILTERING_ENABLED:
             return {"enabled": False}
         try:
-            from app.services.smart_filtering_service import SmartFilteringService
             return SmartFilteringService.get_filtering_summary(optimization_id)
         except Exception:
             return {"enabled": True, "error": "unavailable"}
     
     @classmethod
-    def list_optimizations(cls, limit: int = 50) -> List[Dict[str, Any]]:
+    def list_optimizations(cls, limit: int = 50) -> list[dict[str, Any]]:
         """List recent optimizations."""
         client = cls.get_redis_client()
         optimization_ids = client.lrange(cls.OPTIMIZATION_LIST_KEY, -limit, -1)
@@ -557,8 +553,6 @@ class OptimizationService:
         
         try:
             from app.services.sheets_service import SheetsService
-            from app.services.results_aggregation_service import get_averaged_output_fieldnames
-            from app.config.smart_filtering_config import SMART_FILTERING_ENABLED
             
             # Use averaged results instead of per-stock results
             results = cls.get_averaged_results(optimization_id)
@@ -607,7 +601,6 @@ class OptimizationService:
                 
                 # Log smart filtering summary
                 if SMART_FILTERING_ENABLED:
-                    from app.services.smart_filtering_service import SmartFilteringService
                     summary = SmartFilteringService.get_filtering_summary(optimization_id)
                     if summary.get("eliminated_params"):
                         logger.info(

@@ -1,343 +1,311 @@
 # Algorithm Testing Service
 
-A comprehensive Python-based trading algorithm testing and execution service with support for multiple trading signals, backtesting capabilities, and real-time monitoring.
+A Python-based FastAPI microservice for backtesting trading algorithms using a Redis queue-based worker architecture. Processes stock market data, generates buy/sell signals via technical indicators, and produces detailed trading performance reports.
 
 ## Table of Contents
 
--   [Overview](#overview)
--   [Features](#features)
--   [Project Structure](#project-structure)
--   [Prerequisites](#prerequisites)
--   [Installation](#installation)
--   [Configuration](#configuration)
--   [Usage](#usage)
--   [API Endpoints](#api-endpoints)
--   [Workers](#workers)
--   [Testing](#testing)
--   [Docker Deployment](#docker-deployment)
--   [Contributing](#contributing)
+- [Overview](#overview)
+- [Features](#features)
+- [Project Structure](#project-structure)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [API Endpoints](#api-endpoints)
+- [Workers](#workers)
+- [Testing](#testing)
+- [Signal System](#signal-system)
 
 ## Overview
 
-The Algorithm Testing Service is designed to test, validate, and execute trading algorithms in a distributed environment. It supports multiple buy/sell signals, risk management rules, and provides comprehensive logging and monitoring capabilities.
+The service tests, validates, and executes trading algorithms in a distributed environment. It supports multiple buy/sell signals, risk management rules, and provides monitoring and Google Sheets integration for parameter tuning and result output.
 
 ## Features
 
--   **Multi-Signal Trading System**: Support for 18+ buy signals (B1-B18) and multiple exit strategies (S1-S18)
--   **Queue-Based Processing**: Asynchronous task processing using a queue system
--   **Real-Time Monitoring**: Dashboard and monitoring endpoints for trade tracking
--   **Backtesting Framework**: Historical data testing capabilities
--   **Data Management**: CSV-based data input/output with signal logging
--   **Worker Architecture**: Distributed worker processes for algorithm execution and file processing
--   **Docker Support**: Containerized deployment with docker-compose
--   **Comprehensive Logging**: Signal logs, cash flow logs, and detailed trade records
+- **Multi-Signal Trading System**: 18 buy signals (B1–B18) and 17 exit strategies (S1–S17)
+- **Optimization Engine**: Parameter range optimization with genome-based testing
+- **Smart Filtering**: Toxic parameter elimination during optimization runs
+- **Queue-Based Processing**: Asynchronous task processing via Redis + RQ
+- **Google Sheets Integration**: Read parameter ranges and write results to Sheets
+- **Real-Time Monitoring**: Dashboard and API endpoints for queue/worker tracking
+- **Docker Deployment**: Fully containerized with docker-compose
 
 ## Project Structure
 
 ```
 algorithm-testing-service/
-├── app/                          # Main application package
-│   ├── controllers/             # API route handlers
+├── app/
+│   ├── main.py                    # FastAPI application entry point
+│   ├── controllers/               # API route handlers
 │   │   ├── algorithm_controller.py
-│   │   ├── data_test_controller.py
-│   │   └── monitoring_controller.py
-│   ├── models/                  # Data models
-│   │   └── algorithm_models.py
-│   ├── services/                # Business logic
+│   │   ├── optimization_controller.py
+│   │   ├── monitoring_controller.py
+│   │   ├── summary_controller.py
+│   │   ├── sheets_controller.py
+│   │   ├── genome_controller.py
+│   │   └── dashboard_controller.py
+│   ├── models/
+│   │   └── algorithm_models.py    # Pydantic models
+│   ├── services/
 │   │   ├── file_service.py
-│   │   ├── get_all_stoccks.py
-│   │   └── queue_service.py
-│   ├── workers/                 # Background workers
+│   │   ├── queue_service.py
+│   │   ├── optimization_service.py
+│   │   ├── genome_service.py
+│   │   ├── sheets_service.py
+│   │   ├── data_cache_service.py
+│   │   ├── smart_filtering_service.py
+│   │   ├── results_aggregation_service.py
+│   │   └── get_all_stocks.py
+│   ├── workers/
 │   │   ├── algorithm_worker.py
-│   │   ├── file_write_worker.py
 │   │   ├── result_worker.py
-│   │   └── algo_func/           # Algorithm functions
+│   │   ├── file_write_worker.py
+│   │   ├── concurrent_worker.py
+│   │   └── algo_func/            # Algorithm implementation
 │   │       ├── buy_signals.py
 │   │       ├── sell_signals.py
+│   │       ├── precomputed_indicators.py
 │   │       ├── get_code_energy.py
-│   │       └── get_db_data.py
-│   ├── config/                  # Configuration files
+│   │       ├── get_db_data.py
+│   │       ├── helpers.py
+│   │       └── types.py
+│   ├── config/
 │   │   ├── logging_config.py
-│   │   └── queue_config.py
-│   └── main.py                  # Application entry point
-├── workers/                      # Worker entry points
+│   │   ├── queue_config.py
+│   │   └── smart_filtering_config.py
+│   └── utils/
+│       └── performance_profiler.py
+├── workers/                       # Worker entry scripts
 │   ├── start_algorithm_worker.py
-│   ├── start_file_write_worker.py
-│   └── start_result_worker.py
-├── dashboard/                    # Dashboard application
+│   ├── start_result_worker.py
+│   └── start_file_write_worker.py
+├── scripts/                       # Utility scripts (not part of runtime)
+├── dashboard/
 │   └── start_dashboard.py
-├── tests/                        # Test suite
-│   └── algo_func/               # Algorithm function tests
-├── data/                         # Data files (CSV)
-├── docs/                         # Documentation
-├── Dockerfile                    # Docker image configuration
-├── docker-compose.yml           # Docker compose orchestration
-└── requirements.txt             # Python dependencies
+├── tests/                         # Test suite
+├── data/                          # Runtime data (gitignored)
+├── credentials/                   # Google Sheets credentials (gitignored)
+├── docs/                          # Documentation
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+├── .env.example
+└── AGENTS.md                      # AI agent coding guidelines
 ```
 
 ## Prerequisites
 
--   Python 3.8 or higher
--   Docker and Docker Compose (optional, for containerized deployment)
--   Redis (for queue processing)
--   pandas, numpy (for data processing)
+- Python 3.11+
+- Docker and Docker Compose
+- Redis 7+
 
-## Installation
+## Quick Start
 
-### Local Installation
-
-1. **Clone the repository**
-
-    ```bash
-    git clone <repository-url>
-    cd algorithm-testing-service
-    ```
-
-2. **Create a virtual environment**
-
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Windows: venv\Scripts\activate
-    ```
-
-3. **Install dependencies**
-
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-4. **Configure the application**
-    - Update `app/config/logging_config.py` for logging settings
-    - Update `app/config/queue_config.py` for queue settings
-
-### Docker Installation
+### 1. Configure environment
 
 ```bash
-docker-compose build
-docker-compose up
+cp .env.example .env
+```
+
+Open `.env` and fill in the **required** values:
+
+```env
+# --- Minimum required settings ---
+API_KEY=your_stockfisher_api_key
+
+# Google Sheets (for parameter input and result output)
+INPUT_SHEET_ID=your_google_sheet_id
+OUTPUT_SHEET_ID=your_google_sheet_id
+
+# Backtest date range
+OPTIMIZATION_START_DATE=2025-01-01
+OPTIMIZATION_END_DATE=2026-02-02
+
+# --- Optional tuning ---
+ALGORITHM_WORKER_COUNT=1          # Worker processes
+WORKER_CONCURRENT_TASKS=1          # Threads per worker
+SMART_FILTERING_ENABLED=true       # Eliminate bad parameter combos early
+ALGORITHM_DEBUG=false              # Verbose logging
+```
+
+See [.env.example](.env.example) for the full list of variables.
+
+### 2. Place Google Sheets credentials
+
+```bash
+mkdir -p credentials
+# Copy your service account JSON key:
+cp ~/path-to-key.json credentials/google_sheets.json
+```
+
+Share both input and output Google Sheets with the service account email (found in `client_email` field of the JSON).
+
+### 3. Start with Docker
+
+```bash
+docker-compose up -d --build
+```
+
+This starts 6 services: **redis**, **algorithm-service** (port 8000), **algorithm-worker**, **result-worker**, **file-write-worker**, and **rq-dashboard** (port 9181).
+
+### 4. Verify
+
+```bash
+curl http://localhost:8000/health
+# {"status": "healthy"}
+```
+
+### 5. Run an optimization
+
+```bash
+curl -X POST http://localhost:8000/api/v1/run-optimization \
+  -H "Content-Type: application/json" \
+  -d '{
+    "stock_codes": ["3888"],
+    "use_google_sheets": true,
+    "sheet_id": "YOUR_SHEET_ID"
+  }'
+```
+
+Response:
+```json
+{
+  "optimization_id": "opt_abc123def456",
+  "total_genomes": 16,
+  "total_tasks": 16,
+  "stock_codes": ["3888"],
+  "status": "pending",
+  "message": "Optimization created and 16 tasks queued successfully"
+}
+```
+
+Check progress:
+```bash
+curl http://localhost:8000/api/v1/optimization/opt_abc123def456/status
+```
+
+Monitor queues:
+```bash
+curl http://localhost:8000/api/v1/monitoring/queues
+```
+
+Or open the dashboard at [http://localhost:9181](http://localhost:9181).
+
+### Local Development (without Docker)
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+
+# Start Redis separately, then:
+uvicorn app.main:app --reload --port 8000
 ```
 
 ## Configuration
 
-### Logging Configuration
+All configuration is managed via environment variables in `.env`. See `.env.example` for the full list.
 
-Edit `app/config/logging_config.py` to configure:
+Key settings:
 
--   Log level
--   Log file paths
--   Log format
-
-### Queue Configuration
-
-Edit `app/config/queue_config.py` to configure:
-
--   Queue backend (Redis)
--   Queue name and settings
--   Worker concurrency
-
-### Algorithm Parameters
-
-Algorithm parameters are defined in the individual signal functions:
-
--   **Buy Signals** (B1-B18): In `app/workers/algo_func/buy_signals.py`
--   **Sell Signals** (S1-S18): In `app/workers/algo_func/sell_signals.py`
-
-Key parameters include:
-
--   ATR periods and factors
--   Moving average lengths
--   Bollinger Band settings
--   Entry and exit thresholds
-
-## Usage
-
-### Starting the Application
-
-```bash
-python app/main.py
-```
-
-### Starting Workers
-
-In separate terminals:
-
-```bash
-# Start algorithm worker
-python workers/start_algorithm_worker.py
-
-# Start file write worker
-python workers/start_file_write_worker.py
-
-# Start result worker
-python workers/start_result_worker.py
-```
-
-### Starting the Dashboard
-
-```bash
-python dashboard/start_dashboard.py
-```
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `API_KEY` | StockFisher API key | — |
+| `REDIS_HOST` | Redis hostname | `localhost` |
+| `INPUT_SHEET_ID` | Google Sheet ID for parameter input | — |
+| `OUTPUT_SHEET_ID` | Google Sheet ID for result output | — |
+| `INPUT_SHEET_NAME` | Worksheet tab for parameter ranges | `Parameter Tuning` |
+| `OUTPUT_SHEET_NAME` | Worksheet tab for results | `Automated Results` |
+| `OUTPUT_PER_GENOME_SHEET_NAME` | Worksheet tab for per-genome results | `Automated Results Per Genome` |
+| `OPTIMIZATION_START_DATE` | Backtest start date | `2025-01-01` |
+| `OPTIMIZATION_END_DATE` | Backtest end date | `2026-02-02` |
+| `SMART_FILTERING_ENABLED` | Enable toxic parameter filtering | `true` |
+| `ALGORITHM_WORKER_COUNT` | Number of algorithm worker processes | `1` |
 
 ## API Endpoints
 
-### Algorithm Controller
+### Core
 
--   `POST /api/algorithm/run` - Run algorithm on specified data
--   `GET /api/algorithm/status` - Get algorithm status
--   `POST /api/algorithm/stop` - Stop running algorithm
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/health` | Health check |
+| `POST` | `/api/v1/run-optimization` | Start optimization run |
+| `GET` | `/api/v1/optimization/{id}/status` | Get optimization status |
+| `GET` | `/api/v1/optimization/{id}/results` | Get optimization results |
+| `POST` | `/api/v1/optimization/{id}/cancel` | Cancel optimization |
+| `GET` | `/api/v1/optimizations` | List recent optimizations |
+| `POST` | `/api/v1/preview-genomes` | Preview genome count |
 
-### Data Test Controller
+### Additional
 
--   `POST /api/test/data` - Test data validation
--   `GET /api/test/results` - Get test results
--   `POST /api/test/backtest` - Run backtest on historical data
-
-### Monitoring Controller
-
--   `GET /api/monitor/trades` - Get active trades
--   `GET /api/monitor/performance` - Get performance metrics
--   `GET /api/monitor/signals` - Get signal log
--   `GET /api/monitor/health` - Service health status
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/start-testing/` | Start HK algorithm testing |
+| `GET` | `/api/v1/summary/` | Generate results summary |
+| `GET` | `/api/v1/monitoring/queues` | Queue statistics |
+| `GET` | `/api/v1/monitoring/workers` | Worker status |
+| `GET` | `/api/v1/monitoring/stats` | Overall system stats |
+| `GET` | `/api/v1/sheets/health` | Google Sheets connectivity |
+| `GET` | `/api/v1/genome/{genome_id}/parameters` | Genome parameters |
+| `GET` | `/dashboard` | Web monitoring dashboard |
 
 ## Workers
 
-### Algorithm Worker
-
-Processes algorithm execution tasks from the queue:
-
--   Evaluates buy/sell signals
--   Manages trade entries and exits
--   Calculates energy levels and indicators
--   Logs signal activity
-
-### File Write Worker
-
-Handles file operations:
-
--   Writing signal logs to CSV
--   Writing cash flow records
--   Managing data output files
-
-### Result Worker
-
-Processes and aggregates results:
-
--   Compiles trade results
--   Calculates performance metrics
--   Generates reports
+| Worker | Queue | Purpose |
+|--------|-------|---------|
+| Algorithm Worker | `algorithm_calculation_queue` | Run buy/sell signal detection |
+| Result Worker | `result_processing_queue` | Validate signals, calculate profits |
+| File Write Worker | `file_write_queue` | Persist results to CSV |
 
 ## Testing
-
-Run the test suite:
 
 ```bash
 # Run all tests
 python -m pytest tests/
 
-# Run specific test file
-python -m pytest tests/algo_func/test_buy_signals.py
+# Run specific test
+python -m pytest tests/algo_func/test_b1.py
 
 # Run with coverage
 python -m pytest --cov=app tests/
 ```
 
-### Key Test Files
-
--   `test_b1.py` - Buy signal B1 tests
--   `test_b3.py` - Buy signal B3 tests
--   `test_b8.py` - Buy signal B8 tests
--   `test_sell_signals.py` - Exit signal tests
--   `test_indicators.py` - Technical indicator tests
--   `test_bb_and_bbw.py` - Bollinger Band tests
-
-## Docker Deployment
-
-### Build and Run
-
-```bash
-# Build images
-docker-compose build
-
-# Start services
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop services
-docker-compose down
-```
-
-### Environment Variables
-
-Configure in `.env` file or in `docker-compose.yml`:
-
--   `LOG_LEVEL` - Logging level (DEBUG, INFO, WARNING, ERROR)
--   `QUEUE_HOST` - Redis host
--   `QUEUE_PORT` - Redis port
--   `WORKER_CONCURRENCY` - Number of worker processes
-
 ## Signal System
 
-### Buy Signals (B1-B18)
+### Buy Signals (B1–B18)
 
-| Signal | Description                           |
-| ------ | ------------------------------------- |
-| B1     | New high with closing price condition |
-| B3     | Bollinger Band width slope            |
-| B8     | Higher lows pattern                   |
-| B9     | Price above mid-range condition       |
-| B10    | Recent 250-day low check              |
-| B11    | ATR not at highest level              |
-| B12    | 150-day moving average growth         |
-| B13    | Comparative price performance         |
-| B18    | Market Trend Template (MMT)           |
+| Signal | Description |
+|--------|-------------|
+| B1 | New high with closing price condition |
+| B3 | Bollinger Band width slope |
+| B8 | Higher lows pattern |
+| B9 | Price above mid-range condition |
+| B10 | Recent 250-day low check |
+| B11 | ATR not at highest level |
+| B12 | 150-day moving average growth |
+| B13 | Comparative price performance |
+| B18 | Market Trend Template (MMT) |
 
-### Exit/Stop Signals (S1-S18)
+### Exit Signals (S1–S17)
 
-| Signal | Description                    |
-| ------ | ------------------------------ |
-| S1     | ATR-based stop loss            |
-| S4     | Profitable days ratio          |
-| S5     | Moving stop                    |
-| S6     | No new high in XX days         |
-| S7     | Dark candle pattern            |
-| S8     | ATR volatility expansion       |
-| S10    | ATR ratio and high retracement |
-| S11    | Fibonacci 0.382 level          |
-| S12    | Fibonacci 0.236 level          |
-| S13    | Lowest low condition           |
-| S14    | Comparative price decline      |
-| S15    | Price pullback percentage      |
-| S16    | ATR increase with pullback     |
-| S17    | Range ratio                    |
-| S18    | RSI and lowest low condition   |
-
-## Data Files
-
-The `data/` directory contains CSV files with:
-
--   OHLC data (Open, High, Low, Close)
--   Stock codes (Hong Kong stocks)
--   Trading dates
--   Test data for backtesting
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit changes (`git commit -m 'Add AmazingFeature'`)
-4. Push to branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## License
-
-[Specify your license here]
-
-## Support
-
-For issues, questions, or contributions, please contact the development team or create an issue in the repository.
+| Signal | Description |
+|--------|-------------|
+| S1 | ATR-based stop loss |
+| S4 | Profitable days ratio |
+| S5 | Moving stop |
+| S6 | No new high in N days |
+| S7 | Dark candle pattern |
+| S8 | ATR volatility expansion |
+| S10 | ATR ratio and high retracement |
+| S11 | Fibonacci 0.382 level |
+| S12 | Fibonacci 0.236 level |
+| S13 | Lowest low condition |
+| S14 | Comparative price decline |
+| S15 | Price pullback percentage |
+| S16 | ATR increase with pullback |
+| S17 | Range ratio |
 
 ---
 
-**Last Updated**: January 2026
+**Last Updated:** February 2026  
+**Python Version:** 3.11+  
+**Framework:** FastAPI 0.104.1
