@@ -55,7 +55,7 @@ class AlgorithmParameters:
     # S1 parameters (stop loss)
     input_S1_atr_mult: float = 3.7
     input_S1_atr_period: int = 22
-    input_S1_hard_stop: float = 0.30  # 30% — matches original: if riskFrac > 0.30
+    input_S1_hard_stop: float = 0.30  # 30% as decimal
     input_S1_medium_risk: float = 0.20
     input_S1_medium_stop: float = 0.095
     input_S1_high_stop: float = 0.1425

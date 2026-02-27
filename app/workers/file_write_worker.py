@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 file_service = FileService()
 
 # Output files
-AUTOMATED_RESULTS_FILE = "Automated Results"
+AUTOMATED_RESULTS_FILE = os.getenv('OUTPUT_SHEET_NAME', 'Automated Results')
 COMPARISON_RESULTS_FILE = "comparison_results"
 
 

@@ -24,8 +24,8 @@ from app.services.results_aggregation_service import (
 FIXED_DEPOSIT_AMOUNT = 10000.0
 GENERAL_RESULTS_FILE = "general_results"
 OPTIMIZATION_RESULTS_FILE = "optimization_results"
-AUTOMATED_RESULTS_FILE = "Automated Results"
-AUTOMATED_RESULTS_PER_GENOME_FILE = "Automated Results Per Genome"
+AUTOMATED_RESULTS_FILE = os.getenv('OUTPUT_SHEET_NAME', 'Automated Results')
+AUTOMATED_RESULTS_PER_GENOME_FILE = os.getenv('OUTPUT_PER_GENOME_SHEET_NAME', 'Automated Results Per Genome')
 
 class ErrorResponse(TypedDict):
     error: str

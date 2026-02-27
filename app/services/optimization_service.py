@@ -16,7 +16,8 @@ from app.services.queue_service import QueueService
 logger = logging.getLogger(__name__)
 
 # Single output file for optimization results
-AUTOMATED_RESULTS_FILE = "Automated Results.csv"
+AUTOMATED_RESULTS_FILE = os.getenv('OUTPUT_SHEET_NAME', 'Automated Results') + '.csv'
+AUTOMATED_RESULTS_PER_GENOME_FILE = os.getenv('OUTPUT_PER_GENOME_SHEET_NAME', 'Automated Results Per Genome') + '.csv'
 DATA_DIR = os.getenv('DATA_DIR', 'data')
 
 
@@ -71,7 +72,7 @@ class OptimizationService:
     @classmethod
     def _clear_results_file(cls) -> None:
         """Clear the results CSV files for a fresh optimization run."""
-        for filename in [AUTOMATED_RESULTS_FILE, "Automated Results Per Genome.csv"]:
+        for filename in [AUTOMATED_RESULTS_FILE, AUTOMATED_RESULTS_PER_GENOME_FILE]:
             results_path = os.path.join(DATA_DIR, filename)
             try:
                 if os.path.exists(results_path):
@@ -593,10 +594,11 @@ class OptimizationService:
             output_data.sort(key=lambda x: x.get('Genome ID', ''))
             
             # Write to Google Sheets with ordered fieldnames
+            from app.services.sheets_service import OUTPUT_SHEET_NAME
             success = SheetsService.write_genome_results(
                 sheet_id=metadata.sheet_id,
                 data=output_data,
-                worksheet_name="Automated Results",
+                worksheet_name=OUTPUT_SHEET_NAME,
                 fieldnames=fieldnames
             )
             

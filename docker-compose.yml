@@ -31,6 +31,9 @@ services:
       - GOOGLE_SHEETS_CREDENTIALS_PATH=/app/credentials/google_sheets.json
       - INPUT_SHEET_ID=${INPUT_SHEET_ID:-11a3m0AlIGsZ5O1HRVgjCP3zSCds-b_5OJGXmHKCP56U}
       - OUTPUT_SHEET_ID=${OUTPUT_SHEET_ID:-11a3m0AlIGsZ5O1HRVgjCP3zSCds-b_5OJGXmHKCP56U}
+      - INPUT_SHEET_NAME=${INPUT_SHEET_NAME:-Parameter Tuning}
+      - OUTPUT_SHEET_NAME=${OUTPUT_SHEET_NAME:-Automated Results}
+      - OUTPUT_PER_GENOME_SHEET_NAME=${OUTPUT_PER_GENOME_SHEET_NAME:-Automated Results Per Genome}
     volumes:
       - ./app:/app/app
       - ./logs:/app/logs
@@ -89,6 +92,9 @@ services:
       - LOG_DIR=/app/logs
       - LOG_JSON=${LOG_JSON:-false}
       - GOOGLE_SHEETS_CREDENTIALS_PATH=/app/credentials/google_sheets.json
+      - INPUT_SHEET_NAME=${INPUT_SHEET_NAME:-Parameter Tuning}
+      - OUTPUT_SHEET_NAME=${OUTPUT_SHEET_NAME:-Automated Results}
+      - OUTPUT_PER_GENOME_SHEET_NAME=${OUTPUT_PER_GENOME_SHEET_NAME:-Automated Results Per Genome}
       - OPTIMIZATION_START_DATE=${OPTIMIZATION_START_DATE:-2016-01-01}
       - OPTIMIZATION_END_DATE=${OPTIMIZATION_END_DATE:-2026-02-02}
       - SMART_FILTERING_ENABLED=${SMART_FILTERING_ENABLED:-true}

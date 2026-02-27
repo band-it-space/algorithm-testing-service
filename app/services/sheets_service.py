@@ -448,6 +448,9 @@ class GoogleSheetsService:
 # Configuration from environment
 CREDENTIALS_PATH = os.getenv('GOOGLE_SHEETS_CREDENTIALS', 'credentials/google_sheets.json')
 DEFAULT_SPREADSHEET_ID = os.getenv('GOOGLE_SHEETS_SPREADSHEET_ID', '')
+INPUT_SHEET_NAME = os.getenv('INPUT_SHEET_NAME', 'Parameter Tuning')
+OUTPUT_SHEET_NAME = os.getenv('OUTPUT_SHEET_NAME', 'Automated Results')
+OUTPUT_PER_GENOME_SHEET_NAME = os.getenv('OUTPUT_PER_GENOME_SHEET_NAME', 'Automated Results Per Genome')
 
 
 class SheetsService:
@@ -520,7 +523,7 @@ class SheetsService:
     def write_genome_results(
         sheet_id: str,
         data: List[Dict[str, Any]],
-        worksheet_name: str = "Automated Results",
+        worksheet_name: str = OUTPUT_SHEET_NAME,
         fieldnames: Optional[List[str]] = None
     ) -> bool:
         """
@@ -626,7 +629,7 @@ def read_parameter_ranges_from_sheets(sheet_id: Optional[str] = None) -> List[Di
         spreadsheet = client.open_by_key(sheet_id)
         
         # Look for parameter ranges worksheet
-        worksheet_names = ["Parameter Tuning", "Parameter Tuning Example", "Parameter Ranges", "Parameters", "Input", "Sheet1"]
+        worksheet_names = [INPUT_SHEET_NAME, "Parameter Tuning Example", "Parameter Ranges", "Parameters", "Input", "Sheet1"]
         worksheet = None
         found_name = None
         
