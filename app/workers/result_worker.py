@@ -35,8 +35,8 @@ logger = logging.getLogger(__name__)
 
 API_KEY = os.getenv('API_KEY')
 # Date range from environment (with fallback defaults)
-START_DATE = os.getenv('OPTIMIZATION_START_DATE', '2009-03-09')
-END_DATE = os.getenv('OPTIMIZATION_END_DATE', '2019-03-07')
+START_DATE = os.getenv('OPTIMIZATION_START_DATE', '2009-01-01')
+END_DATE = os.getenv('OPTIMIZATION_END_DATE', '2016-01-01')
 
 file_service = FileService()
 
